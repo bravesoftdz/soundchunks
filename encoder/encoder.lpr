@@ -158,7 +158,7 @@ begin
   for i := 0 to chunkSize - 1 do
   begin
     chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 4.0;
-    fsq := sqr(chunkFreqs[i]);
+    fsq := sqr(max(chunkFreqs[i], 20.0));
     chunkWgtAtts[i] := sqr(12194.0) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)));
     att := maxvalue([0.0, joinSize - i, i - chunkSize + joinSize]);
     if joinSize = 0 then
@@ -167,7 +167,7 @@ begin
     end
     else
     begin
-{$if true}
+{$if false}
       chunkJoinAtts[i] := (joinSize - att) / joinSize;
 {$else}
       chunkJoinAtts[i] := 0.5 - cos((joinSize - att) / joinSize * pi) * 0.5;
@@ -267,7 +267,7 @@ begin
   end;
 
   quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-  chunkSize := StrToIntDef(ParamStr(4), 512);
+  chunkSize := StrToIntDef(ParamStr(4), 256);
   restartCount := StrToIntDef(ParamStr(5), 4);
   joinSize := EnsureRange(round(StrToFloatDef(ParamStr(6), 0.125) * chunkSize), 0, chunkSize div 2);
 
