@@ -6,16 +6,19 @@ uses windows, Classes, sysutils, Types, math, fgl, MTProcs, yakmo;
 
 type
 
+  TEncoder = class;
+
   { TChunk }
 
   TChunk = class
   public
+    encoder: TEncoder;
     rawData: TSmallIntDynArray;
     reducedData: PSmallInt;
     dct: TSingleDynArray;
     weightedDct: TSingleDynArray;
 
-    constructor Create(idx: Integer);
+    constructor Create(enc: TEncoder; idx: Integer);
 
     procedure ComputeDCT;
     procedure ComputeInvDCT;
@@ -23,76 +26,91 @@ type
 
   TChunkList = specialize TFPGObjectList<TChunk>;
 
-  function make16BitSample(smp: Single): SmallInt; forward;
+  { TEncoder }
 
-var
-  chunkSize: Integer;
-  quality: Single;
-  desiredChunkCount: Integer;
-  restartCount: Integer;
-  sampleRate: Integer;
-  joinSize: Integer;
+  TEncoder = class
+  private
+    procedure kMeansReduce;
+    procedure load(fn: String);
+    procedure makeChunks;
+    procedure makeDstData;
+    procedure save(fn: String);
+  public
+    chunkSize: Integer;
+    quality: Single;
+    desiredChunkCount: Integer;
+    restartCount: Integer;
+    sampleRate: Integer;
+    joinSize: Integer;
 
-  srcHeader: array[$00..$2b] of Byte;
-  srcData: TSmallIntDynArray;
-  srcDataCount: Integer;
-  dstData: TSmallIntDynArray;
-  chunkList: TChunkList;
-  chunkFreqs: TSingleDynArray;
-  chunkWgtAtts: TSingleDynArray;
-  chunkJoinAtts: TSingleDynArray;
+    srcHeader: array[$00..$2b] of Byte;
+    srcData: TSmallIntDynArray;
+    srcDataCount: Integer;
+    dstData: TSmallIntDynArray;
+    chunkList: TChunkList;
+    chunkFreqs: TSingleDynArray;
+    chunkWgtAtts: TSingleDynArray;
+    chunkJoinAtts: TSingleDynArray;
 
-
-  { TChunk }
-
-  constructor TChunk.Create(idx: Integer);
-  begin
-    SetLength(rawData, chunkSize);
-    Move(srcData[idx * (chunkSize - joinSize)], rawData[0], chunkSize * SizeOf(SmallInt));
-    reducedData := @rawData[0];
-    SetLength(dct, chunkSize);
-    SetLength(weightedDct, chunkSize);
+    constructor Create;
+    destructor Destroy; override;
   end;
 
-  procedure TChunk.ComputeDCT;
-  var
-    k, n: Integer;
-    sum, s: Single;
-  begin
-    for k := 0 to chunkSize - 1 do
-    begin
-      sum := 0;
-      s := ifthen(k = 0, sqrt(0.5), 1.0);
-      for n := 0 to chunkSize - 1 do
-        sum += s * rawData[n] * cos(pi * (n + 0.5) * k / chunkSize);
-      dct[k] := sum * sqrt (2.0 / chunkSize);
-      weightedDct[k] := dct[k] * chunkWgtAtts[k];
-    end;
-  end;
-
-  procedure TChunk.ComputeInvDCT;
-  var
-    k, n: Integer;
-    sum, s: Single;
-  begin
-    for n := 0 to chunkSize - 1 do
-    begin
-      sum := 0;
-      for k := 0 to chunkSize - 1 do
-      begin
-        s := ifthen(k = 0, sqrt(0.5), 1.0);
-        sum += s * dct[k] * cos (pi * (n + 0.5) * k / chunkSize);
-      end;
-      rawData[n] := make16BitSample(sum * sqrt(2.0 / chunkSize));
-    end;
-  end;
 
 function make16BitSample(smp: Single): SmallInt;
 begin
   Result := EnsureRange(round(smp), Low(SmallInt), High(SmallInt));
 end;
 
-procedure load(fn: String);
+
+{ TChunk }
+
+constructor TChunk.Create(enc: TEncoder; idx: Integer);
+begin
+  encoder := enc;
+  SetLength(rawData, encoder.chunkSize);
+  Move(encoder.srcData[idx * (encoder.chunkSize - encoder.joinSize)], rawData[0], encoder.chunkSize * SizeOf(SmallInt));
+  reducedData := @rawData[0];
+  SetLength(dct, encoder.chunkSize);
+  SetLength(weightedDct, encoder.chunkSize);
+end;
+
+procedure TChunk.ComputeDCT;
+var
+  k, n: Integer;
+  sum, s: Single;
+begin
+  for k := 0 to encoder.chunkSize - 1 do
+  begin
+    sum := 0;
+    s := ifthen(k = 0, sqrt(0.5), 1.0);
+    for n := 0 to encoder.chunkSize - 1 do
+      sum += s * rawData[n] * cos(pi * (n + 0.5) * k / encoder.chunkSize);
+    dct[k] := sum * sqrt (2.0 / encoder.chunkSize);
+    weightedDct[k] := dct[k] * encoder.chunkWgtAtts[k];
+  end;
+end;
+
+procedure TChunk.ComputeInvDCT;
+var
+  k, n: Integer;
+  sum, s: Single;
+begin
+  for n := 0 to encoder.chunkSize - 1 do
+  begin
+    sum := 0;
+    for k := 0 to encoder.chunkSize - 1 do
+    begin
+      s := ifthen(k = 0, sqrt(0.5), 1.0);
+      sum += s * dct[k] * cos (pi * (n + 0.5) * k / encoder.chunkSize);
+    end;
+    rawData[n] := make16BitSample(sum * sqrt(2.0 / encoder.chunkSize));
+  end;
+end;
+
+{ TEncoder }
+
+procedure TEncoder.load(fn: String);
 var
   fs: TFileStream;
 begin
@@ -113,10 +131,9 @@ begin
   writeln(sampleRate, ' Hz');
 end;
 
-procedure save(fn: String);
+procedure TEncoder.save(fn: String);
 var
   fs: TFileStream;
-  i: Integer;
 begin
   WriteLn('save ', fn);
 
@@ -129,7 +146,19 @@ begin
   end;
 end;
 
-procedure makeChunks;
+constructor TEncoder.Create;
+begin
+  chunkList := TChunkList.Create;
+end;
+
+destructor TEncoder.Destroy;
+begin
+  chunkList.Free;
+
+  inherited Destroy;
+end;
+
+procedure TEncoder.makeChunks;
 
   procedure DoDCT(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   var
@@ -178,14 +207,14 @@ begin
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
   begin
-    chunk := TChunk.Create(i);
+    chunk := TChunk.Create(Self, i);
     chunkList.Add(chunk);
   end;
 
   ProcThreadPool.DoParallelLocalProc(@DoDCT, 0, chunkList.Count - 1, nil);
 end;
 
-procedure kMeansReduce;
+procedure TEncoder.kMeansReduce;
 var
   FN, Line: String;
   v1: Single;
@@ -236,7 +265,7 @@ begin
   end;
 end;
 
-procedure makeDstData;
+procedure TEncoder.makeDstData;
 var
   i, j, pos: Integer;
   smp: Single;
@@ -255,6 +284,9 @@ begin
 end;
 
 
+var
+  enc: TEncoder;
+
 begin
   FormatSettings.DecimalSeparator := '.';
 
@@ -266,26 +298,27 @@ begin
     Exit;
   end;
 
-  quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-  chunkSize := StrToIntDef(ParamStr(4), 256);
-  restartCount := StrToIntDef(ParamStr(5), 4);
-  joinSize := EnsureRange(round(StrToFloatDef(ParamStr(6), 0.125) * chunkSize), 0, chunkSize div 2);
+  enc := TEncoder.Create;
 
-  chunkList := TChunkList.Create;
+  enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
+  enc.chunkSize := StrToIntDef(ParamStr(4), 256);
+  enc.restartCount := StrToIntDef(ParamStr(5), 4);
+  enc.joinSize := EnsureRange(round(StrToFloatDef(ParamStr(6), 0.125) * enc.chunkSize), 0, enc.chunkSize div 2);
+
   try
 
-    load(ParamStr(1));
+    enc.load(ParamStr(1));
 
-    makeChunks;
+    enc.makeChunks;
 
-    kMeansReduce;
+    enc.kMeansReduce;
 
-    makeDstData;
+    enc.makeDstData;
 
-    save(ParamStr(2));
+    enc.save(ParamStr(2));
 
   finally
-    chunkList.Free;
+    enc.Free;
   end;
 
   ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
