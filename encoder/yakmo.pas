@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
 
 implementation
 
@@ -62,6 +62,10 @@ begin
                 Setlength(stderrstring,stderrlength);
               end;
             StderrNumBytes := p.StdErr.Read(stderrstring[1+StderrBytesRead], available);
+
+            // output stderr to screen
+            Write(Copy(stderrstring, 1+StderrBytesRead, available));
+
             if StderrNumBytes > 0 then
               Inc(StderrBytesRead, StderrNumBytes);
           end
@@ -110,7 +114,7 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
 var
   i, Clu, Inp: Integer;
   Line, Output, ErrOut: String;
@@ -124,7 +128,7 @@ begin
   try
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'yakmo.exe';
-    Process.Parameters.Add('"' + AFN + '" - - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount));
+    Process.Parameters.Add('"' + AFN + '" - - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount) + IfThen(Normalize, ' -n'));
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 

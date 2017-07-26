@@ -69,7 +69,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\loading_short.wav ..\out.wav 0.2 64 10 0.125"/>
+        <CommandLineParams Value="..\loading_shorter.wav ..\out.wav 0.2 128 25 0.125"/>
       </local>
     </RunParams>
     <Units Count="2">

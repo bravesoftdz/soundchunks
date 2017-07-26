@@ -60,6 +60,7 @@ type
     class function ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+    class function CompressDCT(idx: Integer; coeff: Double): Double;
 
     constructor Create;
     destructor Destroy; override;
@@ -91,8 +92,8 @@ var
 begin
   dta := Copy(rawData);
 
-  for k := 0 to encoder.chunkSize - 1 do
-    dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
+  //for k := 0 to encoder.chunkSize - 1 do
+  //  dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
 
   dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
 
@@ -139,7 +140,7 @@ var
 begin
   SetLength(smps, encoder.joinSize);
   for i := 0 to encoder.joinSize - 1 do
-    smps[i] := reducedChunk.rawData[encoder.chunkSize - encoder.joinSize + i];
+    smps[i] := rawData[encoder.chunkSize - encoder.joinSize + i];
   dctOri := TEncoder.ComputeDCT(encoder.joinSize, smps);
 
   // find the best splice point
@@ -157,6 +158,9 @@ begin
       k := encoder.chunkSize - encoder.joinSize + j;
       curAtt := encoder.chunkJoinAtts[EnsureRange(k + l, encoder.chunkSize - encoder.joinSize, encoder.chunkSize - 1)];
       nextAtt := encoder.chunkJoinAtts[EnsureRange(j + l, 0, encoder.joinSize - 1)];
+
+      Assert(SameValue(curAtt + nextAtt, 1.0));
+
       smps[j] := TEncoder.make16BitSample(curAtt * reducedChunk.rawData[k] + nextAtt * nextChunk.reducedChunk.rawData[j]);
     end;
 
@@ -236,10 +240,10 @@ procedure TEncoder.makeChunks;
     //chunk.ComputeInvDCT;
   end;
 var
-  i: Integer;
+  i, att: Integer;
   chunk: TChunk;
   chunkCount: Integer;
-  fsq, att: Double;
+  fsq: Double;
 begin
   chunkCount := (srcDataCount - 1) div (chunkSize - joinSize) + 1;
   desiredChunkCount := round(chunkCount * quality);
@@ -260,7 +264,7 @@ begin
     else if i >= chunkSize - joinSize - 1 then
       att := i - (chunkSize - joinSize - 1)
     else
-      att := 0.0;
+      att := 0;
 
     if joinSize = 0 then
     begin
@@ -268,13 +272,10 @@ begin
     end
     else
     begin
-{$if true}
       chunkJoinAtts[i] := (joinSize - att) / joinSize;
-{$else}
-      chunkJoinAtts[i] := 0.5 - cos((joinSize - att) / joinSize * pi) * 0.5;
-{$ifend}
-      //writeln(FloatToStr(att), #9, FloatToStr(chunkJoinAtts[i]));
     end;
+
+    //writeln(FloatToStr(att), #9, FloatToStr(chunkJoinAtts[i]));
   end;
 
   chunkList.Capacity := chunkCount;
@@ -289,12 +290,39 @@ end;
 
 procedure TEncoder.kMeansReduce;
 var
+  XYC: TIntegerDynArray;
+
+  procedure DoXYC(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  var
+    i, First: Integer;
+    reducedChunk: TChunk;
+  begin
+    First := -1;
+    for i := 0 to chunkList.Count - 1 do
+      if XYC[i] = AIndex then
+      begin
+        First := i;
+        Break;
+      end;
+
+    reducedChunk := reducedChunks[AIndex];
+
+    if First <> -1 then
+      for i := 0 to chunkList.Count - 1 do
+        if XYC[i] = AIndex then
+        begin
+          reducedChunk.AddToDCT(chunkList[i]);
+          chunkList[i].reducedChunk := reducedChunk;
+        end;
+
+    reducedChunk.FinalizeDCTAdd;
+  end;
+
+var
   FN, Line: String;
   v1: Double;
   Dataset: TStringList;
-  XYC: TIntegerDynArray;
-  i, j, First: Integer;
-  reducedChunk: TChunk;
+  i, j : Integer;
 begin
   WriteLn('kMeansReduce ', desiredChunkCount);
 
@@ -308,7 +336,8 @@ begin
       Line := IntToStr(i) + ' ';
       for j := 0 to chunkSize - 1 do
       begin
-        v1 := chunkList[i].weightedDct[j];
+        v1 := chunkList[i].dct[j];
+        v1 := CompressDCT(j, v1);
         Line := Line + Format('%d:%.12g ', [j, v1]);
       end;
       Dataset.Add(Line);
@@ -320,31 +349,12 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, RestartCount, XYC);
+  DoExternalKMeans(FN, desiredChunkCount, RestartCount, False, XYC);
 
-  for j := 0 to desiredChunkCount - 1 do
-  begin
-    First := -1;
-    for i := 0 to chunkList.Count - 1 do
-      if XYC[i] = j then
-      begin
-        First := i;
-        Break;
-      end;
+  for i := 0 to desiredChunkCount - 1 do
+    reducedChunks.Add(TChunk.Create(Self, 0));
 
-    reducedChunk := TChunk.Create(Self, First);
-    reducedChunks.Add(reducedChunk);
-
-    if First <> -1 then
-      for i := 0 to chunkList.Count - 1 do
-        if XYC[i] = j then
-        begin
-          reducedChunk.AddToDCT(chunkList[i]);
-          chunkList[i].reducedChunk := reducedChunk;
-        end;
-
-    reducedChunk.FinalizeDCTAdd;
-  end;
+  ProcThreadPool.DoParallelLocalProc(@DoXYC, 0, desiredChunkCount - 1, nil);
 end;
 
 procedure TEncoder.makeDstData;
@@ -442,8 +452,13 @@ var
 begin
   Result := 0.0;
   for i := firstCoeff to lastCoeff do
-    Result += sqr(dctA[i] - dctB[i]);
+    Result += sqr(CompressDCT(i, dctA[i]) - CompressDCT(i, dctB[i]));
   Result := sqrt(Result);
+end;
+
+class function TEncoder.CompressDCT(idx: Integer; coeff: Double): Double;
+begin
+  Result := Sign(coeff) * power(Abs(coeff), 0.707);
 end;
 
 var
@@ -489,7 +504,7 @@ begin
     end;
 
     ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
-    ReadLn;
+    Sleep(5000);
   except
     on e: Exception do
     begin
