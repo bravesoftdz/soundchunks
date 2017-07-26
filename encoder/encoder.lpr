@@ -4,6 +4,9 @@ program encoder;
 
 uses windows, Classes, sysutils, Types, math, fgl, MTProcs, yakmo;
 
+const
+  PhaseSearch = 1;
+
 type
 
   TEncoder = class;
@@ -14,12 +17,14 @@ type
   public
     encoder: TEncoder;
 
+    index: Integer;
+    rawModulo: Integer;
     rawData: TSmallIntDynArray;
     reducedChunk: TChunk;
     dct: TDoubleDynArray;
     weightedDct: TDoubleDynArray;
 
-    joinIndex: Integer;
+    joinPhase: Integer;
     joinPenalty: Double;
     dctAddCount: Integer;
 
@@ -30,7 +35,8 @@ type
     procedure AddToDCT(ch: TChunk);
     procedure FinalizeDCTAdd;
 
-    procedure FindBestJoinIndex(nextChunk: TChunk);
+    procedure FindBestModulo;
+    procedure FindBestJoinPhase(prevChunk: TChunk);
   end;
 
   TChunkList = specialize TFPGObjectList<TChunk>;
@@ -44,7 +50,6 @@ type
     desiredChunkCount: Integer;
     restartCount: Integer;
     sampleRate: Integer;
-    joinSize: Integer;
 
     srcHeader: array[$00..$2b] of Byte;
     srcData: TSmallIntDynArray;
@@ -54,13 +59,13 @@ type
     reducedChunks: TChunkList;
     chunkFreqs: TDoubleDynArray;
     chunkWgtAtts: TDoubleDynArray;
-    chunkJoinAtts: TDoubleDynArray;
 
     class function make16BitSample(smp: Double): SmallInt;
     class function ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
-    class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
-    class function CompressDCT(idx: Integer; coeff: Double): Double;
+    class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
+    class function CompressDCT(coeff: Double): Double;
+    class function ComputeJoinPenalty(x, y, z, a, b, c: Double): Double;
 
     constructor Create;
     destructor Destroy; override;
@@ -72,14 +77,22 @@ type
     procedure save(fn: String);
   end;
 
+function Div0(x, y: Double): Double; inline;
+begin
+  Result := 0.0;
+  if not IsZero(y) then
+    Result := x / y;
+end;
 
 { TChunk }
 
 constructor TChunk.Create(enc: TEncoder; idx: Integer);
 begin
+  index := idx;
   encoder := enc;
+  rawModulo := encoder.chunkSize;
   SetLength(rawData, encoder.chunkSize);
-  Move(encoder.srcData[idx * (encoder.chunkSize - encoder.joinSize)], rawData[0], encoder.chunkSize * SizeOf(SmallInt));
+  Move(encoder.srcData[idx * encoder.chunkSize], rawData[0], encoder.chunkSize * SizeOf(SmallInt));
   reducedChunk := Self;
   SetLength(dct, encoder.chunkSize);
   SetLength(weightedDct, encoder.chunkSize);
@@ -90,10 +103,10 @@ var
   k: Integer;
   dta: TSmallIntDynArray;
 begin
-  dta := Copy(rawData);
+  SetLength(dta, encoder.chunkSize);
 
   for k := 0 to encoder.chunkSize - 1 do
-    dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
+    dta[k] := TEncoder.make16BitSample(rawData[k mod rawModulo]);
 
   dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
 
@@ -131,48 +144,69 @@ begin
   ComputeInvDCT;
 end;
 
-procedure TChunk.FindBestJoinIndex(nextChunk: TChunk);
+procedure TChunk.FindBestModulo;
 var
-  i, j, k, l: Integer;
-  smps: TSmallIntDynArray;
-  dctOri, dctIter: TDoubleDynArray;
-  cmp, curAtt, nextAtt: Double;
+  i, a, b, c, x, y, z: Integer;
+  cmp, best: Double;
 begin
-  SetLength(smps, encoder.joinSize);
-  for i := 0 to encoder.joinSize - 1 do
-    smps[i] := rawData[encoder.chunkSize - encoder.joinSize + i];
-  dctOri := TEncoder.ComputeDCT(encoder.joinSize, smps);
+  // find the best looping point in a chunk
 
-  // find the best splice point
+  rawModulo := encoder.chunkSize;
+  best := MaxDouble;
 
-  joinIndex := 0;
-  joinPenalty := MaxDouble;
-
-  i := encoder.joinSize div 2;
-  for i := 0 to encoder.joinSize - 1 do
+  for i := encoder.chunkSize - PhaseSearch * 2 downto encoder.chunkSize div 2 do
   begin
-    l := i - encoder.joinSize div 2;
+    x := rawData[0];
+    y := rawData[PhaseSearch];
+    z := rawData[PhaseSearch * 2];
 
-    for j := 0 to encoder.joinSize - 1 do
+    a := rawData[i - 1];
+    b := rawData[i - 1 + PhaseSearch];
+    c := rawData[i - 1 + PhaseSearch * 2];
+
+    cmp := TEncoder.ComputeJoinPenalty(x, y, z, a, b, c);
+
+    if cmp < best then
     begin
-      k := encoder.chunkSize - encoder.joinSize + j;
-      curAtt := encoder.chunkJoinAtts[EnsureRange(k + l, encoder.chunkSize - encoder.joinSize, encoder.chunkSize - 1)];
-      nextAtt := encoder.chunkJoinAtts[EnsureRange(j + l, 0, encoder.joinSize - 1)];
-
-      Assert(SameValue(curAtt + nextAtt, 1.0));
-
-      smps[j] := TEncoder.make16BitSample(curAtt * reducedChunk.rawData[k] + nextAtt * nextChunk.reducedChunk.rawData[j]);
+      best := cmp;
+      rawModulo := i;
     end;
+  end;
+end;
 
-    dctIter := TEncoder.ComputeDCT(encoder.joinSize, smps);
+procedure TChunk.FindBestJoinPhase(prevChunk: TChunk);
+var
+  i, a, b, c, x, y, z, pmd, md: Integer;
+  cmp: Double;
+begin
+  // find the best phase shift to join the chunks
 
-    cmp := TEncoder.CompareDCT(0, encoder.joinSize - 1, dctOri, dctIter);
+  joinPhase := 0;
+  joinPenalty := Infinity;
+
+  pmd := prevChunk.reducedChunk.rawModulo;
+  md := reducedChunk.rawModulo;
+
+  for i := 0 to md - 1 do
+  begin
+    x := prevChunk.reducedChunk.rawData[(encoder.chunkSize) mod pmd];
+    y := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch) mod pmd];
+    z := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch * 2) mod pmd];
+
+    a := reducedChunk.rawData[i];
+    b := reducedChunk.rawData[(i + PhaseSearch) mod md];
+    c := reducedChunk.rawData[(i + PhaseSearch * 2) mod md];
+
+    cmp := TEncoder.ComputeJoinPenalty(x, y, z, a, b, c);
+
     if cmp < joinPenalty then
     begin
       joinPenalty := cmp;
-      joinIndex := i;
+      joinPhase := i;
     end;
   end;
+
+  assert(not IsInfinite(joinPenalty));
 end;
 
 { TEncoder }
@@ -235,22 +269,20 @@ procedure TEncoder.makeChunks;
   begin
     chunk:= chunkList[AIndex];
 
+    chunk.FindBestModulo;
     chunk.ComputeDCT;
-    //chunkList[AIndex].dct[0] := 0; // remove DC
-    //chunk.ComputeInvDCT;
   end;
 var
-  i, att: Integer;
+  i: Integer;
   chunk: TChunk;
   chunkCount: Integer;
   fsq: Double;
 begin
-  chunkCount := (srcDataCount - 1) div (chunkSize - joinSize) + 1;
+  chunkCount := (srcDataCount - 1) div chunkSize + 1;
   desiredChunkCount := round(chunkCount * quality);
 
   WriteLn('makeChunks ', chunkSize, ' * ', chunkCount);
 
-  SetLength(chunkJoinAtts, chunkSize);
   SetLength(chunkWgtAtts, chunkSize);
   SetLength(chunkFreqs, chunkSize);
   for i := 0 to chunkSize - 1 do
@@ -258,24 +290,6 @@ begin
     chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 4.0;
     fsq := sqr(max(chunkFreqs[i], 20.0));
     chunkWgtAtts[i] := sqr(12194.0) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)));
-
-    if i <= joinSize - 1 then
-      att := joinSize - i - 1
-    else if i >= chunkSize - joinSize - 1 then
-      att := i - (chunkSize - joinSize - 1)
-    else
-      att := 0;
-
-    if joinSize = 0 then
-    begin
-      chunkJoinAtts[i] := 1.0;
-    end
-    else
-    begin
-      chunkJoinAtts[i] := (joinSize - att) / joinSize;
-    end;
-
-    //writeln(FloatToStr(att), #9, FloatToStr(chunkJoinAtts[i]));
   end;
 
   chunkList.Capacity := chunkCount;
@@ -337,7 +351,7 @@ begin
       for j := 0 to chunkSize - 1 do
       begin
         v1 := chunkList[i].dct[j];
-        v1 := CompressDCT(j, v1);
+        v1 := CompressDCT(v1);
         Line := Line + Format('%d:%.12g ', [j, v1]);
       end;
       Dataset.Add(Line);
@@ -361,51 +375,36 @@ procedure TEncoder.makeDstData;
 
   procedure DoFind(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   begin
-    chunkList[AIndex].FindBestJoinIndex(chunkList[AIndex + 1]);
+    chunkList[AIndex].FindBestJoinPhase(chunkList[AIndex - 1]);
   end;
 
 var
-  i, j, k, l, pos: Integer;
-  smp, curAtt, nextAtt: Double;
+  i, j: Integer;
   penalty: Double;
+  chunk: TChunk;
 begin
   WriteLn('makeDstData');
 
-  if joinSize > 0 then
-    ProcThreadPool.DoParallelLocalProc(@DoFind, 0, chunkList.Count - 2, nil);
+  //for i := 1 to chunkList.Count - 1 do
+  //  chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
+
+  ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
 
   penalty := 0.0;
   SetLength(dstData, Length(srcData));
   FillWord(dstData[0], Length(srcData), 0);
-  for i := 0 to chunkList.Count - 2 do
+  for i := 0 to chunkList.Count - 1 do
   begin
-    l := chunkList[i].joinIndex - joinSize div 2;
-    penalty += chunkList[i].joinPenalty;
+    chunk := chunkList[i];
 
-    for k := joinSize to chunkSize - 1 do
-    begin
-      pos := i * (chunkSize - joinSize) + k;
-      j := k - chunkSize + joinSize;
+    if not IsInfinite(chunk.joinPenalty) then
+      penalty += chunk.joinPenalty;
 
-      if j >= 0 then
-      begin
-        curAtt := chunkJoinAtts[EnsureRange(k + l, chunkSize - joinSize, chunkSize - 1)];
-        nextAtt := chunkJoinAtts[EnsureRange(j + l, 0, joinSize - 1)];
-
-        Assert(SameValue(curAtt + nextAtt, 1.0));
-
-        smp := curAtt * chunkList[i].reducedChunk.rawData[k] + nextAtt * chunkList[i + 1].reducedChunk.rawData[j];
-      end
-      else
-      begin
-        smp := chunkList[i].reducedChunk.rawData[k];
-      end;
-
-      dstData[pos] := TEncoder.make16BitSample(smp);
-    end;
+    for j := 0 to chunkSize - 1 do
+      dstData[i * chunkSize + j] := chunk.reducedChunk.rawData[(chunk.joinPhase + j) mod chunk.reducedChunk.rawModulo];
   end;
 
-  WriteLn(FloatToStr(penalty / (chunkList.Count - 1)), ' average join penalty');
+  WriteLn('avg join penalty: ', FloatToStr(penalty / chunkList.Count));
 end;
 
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
@@ -447,19 +446,37 @@ begin
   end;
 end;
 
-class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
 var
   i: Integer;
 begin
   Result := 0.0;
-  for i := firstCoeff to lastCoeff do
-    Result += sqr(CompressDCT(i, dctA[i]) - CompressDCT(i, dctB[i]));
+  if compress then
+  begin
+    for i := firstCoeff to lastCoeff do
+      Result += sqr(CompressDCT(dctA[i]) - CompressDCT(dctB[i]));
+  end
+  else
+  begin
+    for i := firstCoeff to lastCoeff do
+      Result += sqr(dctA[i] - dctB[i]);
+  end;
   Result := sqrt(Result);
 end;
 
-class function TEncoder.CompressDCT(idx: Integer; coeff: Double): Double;
+class function TEncoder.CompressDCT(coeff: Double): Double;
 begin
   Result := Sign(coeff) * power(Abs(coeff), 0.707);
+end;
+
+class function TEncoder.ComputeJoinPenalty(x, y, z, a, b, c: Double): Double;
+var
+  dStart, dEnd: Double;
+begin
+  dStart := -1.5 * x + 2.0 * y - 0.5 * z;
+  dEnd := -1.5 * a + 2.0 * b - 0.5 * c;
+
+  Result := Div0(abs(dEnd - dStart), abs(dEnd) + abs(dStart)) + Div0(abs(b - x), abs(b) + abs(x));
 end;
 
 var
@@ -476,7 +493,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [chunk size] [quality 0.0-1.0] [kmeans restarts 1-inf] [join ratio 0.0-0.5]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk size] [iter count 1-inf]');
       WriteLn;
       Exit;
     end;
@@ -486,7 +503,6 @@ begin
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.chunkSize := StrToIntDef(ParamStr(4), 256);
     enc.restartCount := StrToIntDef(ParamStr(5), 4);
-    enc.joinSize := EnsureRange(round(StrToFloatDef(ParamStr(6), 0.125) * enc.chunkSize), 0, enc.chunkSize div 2);
 
     try
 
@@ -494,7 +510,7 @@ begin
 
       enc.makeChunks;
 
-      enc.kMeansReduce;
+      //enc.kMeansReduce;
 
       enc.makeDstData;
 
