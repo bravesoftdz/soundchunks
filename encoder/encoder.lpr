@@ -15,17 +15,20 @@ type
     encoder: TEncoder;
 
     rawData: TSmallIntDynArray;
-    reducedData: PSmallInt;
+    reducedChunk: TChunk;
     dct: TDoubleDynArray;
     weightedDct: TDoubleDynArray;
 
     joinIndex: Integer;
     joinPenalty: Double;
+    dctAddCount: Integer;
 
     constructor Create(enc: TEncoder; idx: Integer);
 
     procedure ComputeDCT;
     procedure ComputeInvDCT;
+    procedure AddToDCT(ch: TChunk);
+    procedure FinalizeDCTAdd;
 
     procedure FindBestJoinIndex(nextChunk: TChunk);
   end;
@@ -48,6 +51,7 @@ type
     srcDataCount: Integer;
     dstData: TSmallIntDynArray;
     chunkList: TChunkList;
+    reducedChunks: TChunkList;
     chunkFreqs: TDoubleDynArray;
     chunkWgtAtts: TDoubleDynArray;
     chunkJoinAtts: TDoubleDynArray;
@@ -75,7 +79,7 @@ begin
   encoder := enc;
   SetLength(rawData, encoder.chunkSize);
   Move(encoder.srcData[idx * (encoder.chunkSize - encoder.joinSize)], rawData[0], encoder.chunkSize * SizeOf(SmallInt));
-  reducedData := @rawData[0];
+  reducedChunk := Self;
   SetLength(dct, encoder.chunkSize);
   SetLength(weightedDct, encoder.chunkSize);
 end;
@@ -83,8 +87,14 @@ end;
 procedure TChunk.ComputeDCT;
 var
   k: Integer;
+  dta: TSmallIntDynArray;
 begin
-  dct := TEncoder.ComputeDCT(encoder.chunkSize, rawData);
+  dta := Copy(rawData);
+
+  for k := 0 to encoder.chunkSize - 1 do
+    dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
+
+  dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
 
   for k := 0 to encoder.chunkSize - 1 do
     weightedDct[k] := dct[k] * encoder.chunkWgtAtts[k];
@@ -93,6 +103,31 @@ end;
 procedure TChunk.ComputeInvDCT;
 begin
   rawData := TEncoder.ComputeInvDCT(encoder.chunkSize, dct);
+end;
+
+procedure TChunk.AddToDCT(ch: TChunk);
+var
+  k: Integer;
+  ldct: TDoubleDynArray;
+begin
+  ldct := TEncoder.ComputeDCT(encoder.chunkSize, ch.rawData);
+  for k := 0 to encoder.chunkSize - 1 do
+    dct[k] += ldct[k];
+  Inc(dctAddCount);
+end;
+
+procedure TChunk.FinalizeDCTAdd;
+var
+  k: Integer;
+begin
+  if dctAddCount = 0 then Exit;
+
+  for k := 0 to encoder.chunkSize - 1 do
+    dct[k] /= dctAddCount;
+
+  dctAddCount := 0;
+
+  ComputeInvDCT;
 end;
 
 procedure TChunk.FindBestJoinIndex(nextChunk: TChunk);
@@ -104,7 +139,7 @@ var
 begin
   SetLength(smps, encoder.joinSize);
   for i := 0 to encoder.joinSize - 1 do
-    smps[i] := reducedData[encoder.chunkSize - encoder.joinSize + i];
+    smps[i] := reducedChunk.rawData[encoder.chunkSize - encoder.joinSize + i];
   dctOri := TEncoder.ComputeDCT(encoder.joinSize, smps);
 
   // find the best splice point
@@ -112,7 +147,7 @@ begin
   joinIndex := 0;
   joinPenalty := MaxDouble;
 
-//  i := encoder.joinSize div 2;
+  i := encoder.joinSize div 2;
   for i := 0 to encoder.joinSize - 1 do
   begin
     l := i - encoder.joinSize div 2;
@@ -122,12 +157,12 @@ begin
       k := encoder.chunkSize - encoder.joinSize + j;
       curAtt := encoder.chunkJoinAtts[EnsureRange(k + l, encoder.chunkSize - encoder.joinSize, encoder.chunkSize - 1)];
       nextAtt := encoder.chunkJoinAtts[EnsureRange(j + l, 0, encoder.joinSize - 1)];
-      smps[j] := TEncoder.make16BitSample(curAtt * reducedData[k] + nextAtt * nextChunk.reducedData[j]);
+      smps[j] := TEncoder.make16BitSample(curAtt * reducedChunk.rawData[k] + nextAtt * nextChunk.reducedChunk.rawData[j]);
     end;
 
     dctIter := TEncoder.ComputeDCT(encoder.joinSize, smps);
 
-    cmp := TEncoder.CompareDCT(encoder.joinSize div 4, encoder.joinSize - 1, dctOri, dctIter);
+    cmp := TEncoder.CompareDCT(0, encoder.joinSize - 1, dctOri, dctIter);
     if cmp < joinPenalty then
     begin
       joinPenalty := cmp;
@@ -177,11 +212,13 @@ end;
 constructor TEncoder.Create;
 begin
   chunkList := TChunkList.Create;
+  reducedChunks := TChunkList.Create;
 end;
 
 destructor TEncoder.Destroy;
 begin
   chunkList.Free;
+  reducedChunks.Free;
 
   inherited Destroy;
 end;
@@ -257,6 +294,7 @@ var
   Dataset: TStringList;
   XYC: TIntegerDynArray;
   i, j, First: Integer;
+  reducedChunk: TChunk;
 begin
   WriteLn('kMeansReduce ', desiredChunkCount);
 
@@ -294,10 +332,18 @@ begin
         Break;
       end;
 
+    reducedChunk := TChunk.Create(Self, First);
+    reducedChunks.Add(reducedChunk);
+
     if First <> -1 then
       for i := 0 to chunkList.Count - 1 do
         if XYC[i] = j then
-          chunkList[i].reducedData := @chunkList[First].rawData[0];
+        begin
+          reducedChunk.AddToDCT(chunkList[i]);
+          chunkList[i].reducedChunk := reducedChunk;
+        end;
+
+    reducedChunk.FinalizeDCTAdd;
   end;
 end;
 
@@ -336,13 +382,12 @@ begin
         nextAtt := chunkJoinAtts[EnsureRange(j + l, 0, joinSize - 1)];
 
         Assert(SameValue(curAtt + nextAtt, 1.0));
-        Assert(not IsZero(chunkList[i].joinPenalty) or (chunkList[i].reducedData[k] = chunkList[i + 1].reducedData[j]));
 
-        smp := curAtt * chunkList[i].reducedData[k] + nextAtt * chunkList[i + 1].reducedData[j];
+        smp := curAtt * chunkList[i].reducedChunk.rawData[k] + nextAtt * chunkList[i + 1].reducedChunk.rawData[j];
       end
       else
       begin
-        smp := chunkList[i].reducedData[k];
+        smp := chunkList[i].reducedChunk.rawData[k];
       end;
 
       dstData[pos] := TEncoder.make16BitSample(smp);
