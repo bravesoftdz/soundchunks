@@ -92,8 +92,8 @@ var
 begin
   dta := Copy(rawData);
 
-  //for k := 0 to encoder.chunkSize - 1 do
-  //  dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
+  for k := 0 to encoder.chunkSize - 1 do
+    dta[k] := TEncoder.make16BitSample(dta[k] * encoder.chunkJoinAtts[k]);
 
   dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
 
@@ -371,7 +371,8 @@ var
 begin
   WriteLn('makeDstData');
 
-  ProcThreadPool.DoParallelLocalProc(@DoFind, 0, chunkList.Count - 2, nil);
+  if joinSize > 0 then
+    ProcThreadPool.DoParallelLocalProc(@DoFind, 0, chunkList.Count - 2, nil);
 
   penalty := 0.0;
   SetLength(dstData, Length(srcData));
