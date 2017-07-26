@@ -8,6 +8,7 @@ uses
   Classes, SysUtils, Types, Process, strutils;
 
 procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
+function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean): Double;
 
 implementation
 
@@ -18,7 +19,7 @@ Const
 // We need to also collect stderr output in order to avoid
 // lock out if the stderr pipe is full.
 function internalRuncommand(p:TProcess;var outputstring:string;
-                            var stderrstring:string; var exitstatus:integer):integer;
+                            var stderrstring:string; var exitstatus:integer; PrintErr: Boolean):integer;
 var
     numbytes,bytesread,available : integer;
     outputlength, stderrlength : integer;
@@ -64,7 +65,8 @@ begin
             StderrNumBytes := p.StdErr.Read(stderrstring[1+StderrBytesRead], available);
 
             // output stderr to screen
-            Write(Copy(stderrstring, 1+StderrBytesRead, available));
+            if PrintErr then
+              Write(Copy(stderrstring, 1+StderrBytesRead, available));
 
             if StderrNumBytes > 0 then
               Inc(StderrBytesRead, StderrNumBytes);
@@ -133,7 +135,7 @@ begin
     Process.Priority := ppIdle;
 
     i := 0;
-    internalRuncommand(Process, Output, ErrOut, i); // destroys Process
+    internalRuncommand(Process, Output, ErrOut, i, True); // destroys Process
 
     DeleteFile(PChar(AFN));
 
@@ -155,6 +157,45 @@ begin
   end;
 end;
 
+
+function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean): Double;
+var
+  i, Clu, Inp: Integer;
+  Line, Output, ErrOut: String;
+  OutSL: TStringList;
+  Process: TProcess;
+  OutputStream: TMemoryStream;
+begin
+  Process := TProcess.Create(nil);
+  OutSL := TStringList.Create;
+  OutputStream := TMemoryStream.Create;
+  try
+    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
+    Process.Executable := 'eaqual.exe';
+    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '"');
+    Process.ShowWindow := swoHIDE;
+    Process.Priority := ppIdle;
+
+    i := 0;
+    internalRuncommand(Process, Output, ErrOut, i, False); // destroys Process
+
+    OutSL.LineBreak := #13#10;
+    OutSL.Text := Output;
+
+    for i := 0 to OutSL.Count - 1 do
+    begin
+      Line := OutSL[i];
+      if (Pos('Resulting ODG:', Line) = 1) and not UseDIX or (Pos('Resulting DIX:', Line) = 1) and UseDIX then
+      begin
+        Result := StrToFloatDef(RightStr(Line, Pos(#9, ReverseString(Line)) - 1), 0);
+        Break;
+      end;
+    end;
+  finally
+    OutputStream.Free;
+    OutSL.Free;
+  end;
+end;
 
 end.
 

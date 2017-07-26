@@ -75,6 +75,8 @@ type
     procedure makeChunks;
     procedure makeDstData;
     procedure save(fn: String);
+
+    function ComputeEAQUAL(chunkSz: Integer; const smpRef, smpTst: TSmallIntDynArray): Double;
   end;
 
 function Div0(x, y: Double): Double; inline;
@@ -146,16 +148,19 @@ end;
 
 procedure TChunk.FindBestModulo;
 var
-  i, a, b, c, x, y, z: Integer;
+  i, j, a, b, c, x, y, z: Integer;
   cmp, best: Double;
+  smps: TSmallIntDynArray;
 begin
   // find the best looping point in a chunk
 
+  SetLength(smps, encoder.chunkSize);
   rawModulo := encoder.chunkSize;
   best := MaxDouble;
 
   for i := encoder.chunkSize - PhaseSearch * 2 downto encoder.chunkSize div 2 do
   begin
+
     x := rawData[0];
     y := rawData[PhaseSearch];
     z := rawData[PhaseSearch * 2];
@@ -165,6 +170,13 @@ begin
     c := rawData[i - 1 + PhaseSearch * 2];
 
     cmp := TEncoder.ComputeJoinPenalty(x, y, z, a, b, c);
+    if cmp > 0.5 then
+      Continue;
+
+    for j := 0 to encoder.chunkSize - 1 do
+      smps[j] := rawData[j mod i];
+
+    cmp := encoder.ComputeEAQUAL(encoder.chunkSize, rawData, smps);
 
     if cmp < best then
     begin
@@ -183,6 +195,7 @@ begin
 
   joinPhase := 0;
   joinPenalty := Infinity;
+  exit;
 
   pmd := prevChunk.reducedChunk.rawModulo;
   md := reducedChunk.rawModulo;
@@ -340,7 +353,7 @@ var
 begin
   WriteLn('kMeansReduce ', desiredChunkCount);
 
-  FN := ExtractFilePath(ParamStr(0)) + 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt';
+  FN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
   Dataset := TStringList.Create;
   Dataset.LineBreak := #10;
 
@@ -476,7 +489,40 @@ begin
   dStart := -1.5 * x + 2.0 * y - 0.5 * z;
   dEnd := -1.5 * a + 2.0 * b - 0.5 * c;
 
-  Result := Div0(abs(dEnd - dStart), abs(dEnd) + abs(dStart)) + Div0(abs(b - x), abs(b) + abs(x));
+  Result := Div0(sqr(dEnd - dStart), sqr(dEnd) + sqr(dStart)) + Div0(sqr(b - x), sqr(b) + sqr(x));
+end;
+
+function TEncoder.ComputeEAQUAL(chunkSz: Integer; const smpRef, smpTst: TSmallIntDynArray): Double;
+var
+  FNRef, FNTst: String;
+  fs: TFileStream;
+begin
+
+  FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
+  FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
+
+  fs := TFileStream.Create(FNRef, fmCreate);
+  try
+    fs.WriteBuffer(srcHeader[0], $28);
+    fs.WriteDWord(chunkSz * SizeOf(SmallInt));
+    fs.WriteBuffer(smpRef[0], chunkSz * SizeOf(SmallInt));
+  finally
+    fs.Free;
+  end;
+
+  fs := TFileStream.Create(FNTst, fmCreate);
+  try
+    fs.WriteBuffer(srcHeader[0], $28);
+    fs.WriteDWord(chunkSz * SizeOf(SmallInt));
+    fs.WriteBuffer(smpTst[0], chunkSz * SizeOf(SmallInt));
+  finally
+    fs.Free;
+  end;
+
+  Result := -DoExternalEAQUAL(FNRef, FNTst, False);
+
+  DeleteFile(FNRef);
+  DeleteFile(FNTst);
 end;
 
 var
