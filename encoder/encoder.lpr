@@ -61,7 +61,6 @@ type
     reducedChunks: TChunkList;
     chunkFreqs: TDoubleDynArray;
     chunkWgtAtts: TDoubleDynArray;
-    chunkWindow: TDoubleDynArray;
 
     class function make16BitSample(smp: Double): SmallInt;
     class function CompareFFT(firstCoeff, lastCoeff: Integer; compress: Boolean; const fftA, fftB: TDoubleDynArray): Double;
@@ -127,8 +126,6 @@ begin
     weightedFft[k] := fft[k];
     weightedFft[k].X *= encoder.chunkWgtAtts[k];
   end;
-
-  //FindBestModulo;
 end;
 
 procedure TChunk.AddToFFT(ch: TChunk);
@@ -192,7 +189,7 @@ begin
     b := srcData[i + PhaseSearch];
     c := srcData[i + PhaseSearch * 2];
 
-    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, False) then
+    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, True) then
       Continue;
 
     for j := 0 to encoder.chunkSize - 1 do
@@ -355,6 +352,7 @@ procedure TEncoder.makeChunks;
   procedure DoFFT(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   begin
     chunkList[AIndex].ComputeFFT;
+    chunkList[AIndex].FindBestModulo;
   end;
 var
   i: Integer;
@@ -365,19 +363,17 @@ begin
   chunkCount := (srcDataCount - 1) div chunkSize + 1;
   desiredChunkCount := round(chunkCount * quality);
 
-  WriteLn('makeChunks ', chunkSize, ' * ', chunkCount);
-
   highPassData := DoHPFilter(chunkSize, srcData);
+
+  WriteLn('makeChunks ', chunkSize, ' * ', chunkCount);
 
   SetLength(chunkWgtAtts, chunkSize);
   SetLength(chunkFreqs, chunkSize);
-  SetLength(chunkWindow, chunkSize);
   for i := 0 to chunkSize - 1 do
   begin
     chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 2.0;
     fsq := system.sqr(max(chunkFreqs[i], 20.0));
     chunkWgtAtts[i] := system.sqr(12194.0) * fsq / ((fsq + system.sqr(20.6)) * (fsq + system.sqr(12194.0)));
-    chunkWindow[i] := 0.53836 - 0.46164 * cos((2 * pi * i) / (chunkSize - 1));
   end;
 
   chunkList.Capacity := chunkCount;
@@ -478,7 +474,7 @@ begin
   //for i := 1 to chunkList.Count - 1 do
   //  chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
   //
-  //ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
+  ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
   WriteLn;
 
   phase := 0;
@@ -497,7 +493,7 @@ begin
     for j := 0 to chunkSize - 1 do
       dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[(phase + chunk.joinPhase + j) mod chunk.reducedChunk.srcModulo];
 
-    //phase += chunk.joinPhase;
+    //phase := (phase + chunk.joinPhase) mod chunk.reducedChunk.srcModulo;
   end;
 
   WriteLn('avg join penalty: ', FloatToStr(penalty / chunkList.Count));
@@ -540,8 +536,8 @@ var
   h: TReal1DArray;
   ins, res: TReal1DArray;
 begin
-  fc := 1 / chunkSz;
-  b := fc * 0.01;
+  fc := 1.0 / chunkSz;
+  b := fc * 0.001;
 
   fc += b;
   N := ceil(4 / b);
