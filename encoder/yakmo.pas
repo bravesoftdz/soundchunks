@@ -7,8 +7,12 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils;
 
+const
+  EAQUALBLockSize = 2048;
+
 procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean): Double;
+function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean): TDoubleDynArray;
 
 implementation
 
@@ -187,10 +191,58 @@ begin
       Line := OutSL[i];
       if (Pos('Resulting ODG:', Line) = 1) and not UseDIX or (Pos('Resulting DIX:', Line) = 1) and UseDIX then
       begin
-        Result := StrToFloatDef(RightStr(Line, Pos(#9, ReverseString(Line)) - 1), 0);
+        Result := -StrToFloatDef(RightStr(Line, Pos(#9, ReverseString(Line)) - 1), 0);
         Break;
       end;
     end;
+  finally
+    OutputStream.Free;
+    OutSL.Free;
+  end;
+end;
+
+function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean): TDoubleDynArray;
+var
+  i: Integer;
+  Line, Output, ErrOut, OutFN: String;
+  OutSL: TStringList;
+  Process: TProcess;
+  OutputStream: TMemoryStream;
+begin
+  Process := TProcess.Create(nil);
+  OutSL := TStringList.Create;
+  OutputStream := TMemoryStream.Create;
+  try
+    OutFN := GetTempFileName('', 'out-'+IntToStr(GetCurrentThreadId)+'.txt');
+
+    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
+    Process.Executable := 'eaqual.exe';
+    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blockout ' + IfThen(UseDIX, 'DI', 'ODG') + ' "' + OutFN + '"');
+    Process.ShowWindow := swoHIDE;
+    Process.Priority := ppIdle;
+
+    Assert(FileExists(AFNRef));
+    Assert(FileExists(AFNTest));
+    Assert(not FileExists(OutFN));
+
+    i := 0;
+    internalRuncommand(Process, Output, ErrOut, i, False); // destroys Process
+
+    Assert(FileExists(OutFN));
+
+    OutSL.LineBreak := #13#10;
+    OutSL.LoadFromFile(OutFN);
+
+    SetLength(Result, OutSL.Count - 2);
+
+    for i := 2 to OutSL.Count - 1 do
+    begin
+      Line := OutSL[i];
+      Result[i - 2] := -StrToFloatDef(Line, 0.0);
+    end;
+
+    DeleteFile(OutFN);
+
   finally
     OutputStream.Free;
     OutSL.Free;

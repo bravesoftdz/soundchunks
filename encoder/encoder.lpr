@@ -8,6 +8,7 @@ const
   PhaseSearch = 1;
 
 type
+  TSmallIntDynArray2 = array of TSmallIntDynArray;
 
   TEncoder = class;
 
@@ -65,7 +66,7 @@ type
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
     class function CompressDCT(coeff: Double): Double;
-    class function ComputeJoinPenalty(x, y, z, a, b, c: Double): Double;
+    class function CheckJoinPenalty(x, y, z, a, b, c: Double): Boolean;
 
     constructor Create;
     destructor Destroy; override;
@@ -76,7 +77,9 @@ type
     procedure makeDstData;
     procedure save(fn: String);
 
-    function ComputeEAQUAL(chunkSz: Integer; const smpRef, smpTst: TSmallIntDynArray): Double;
+    function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
+    function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray;
+      smpTst: TSmallIntDynArray2): TDoubleDynArray;
   end;
 
 function Div0(x, y: Double): Double; inline;
@@ -148,78 +151,120 @@ end;
 
 procedure TChunk.FindBestModulo;
 var
-  i, j, a, b, c, x, y, z: Integer;
+  i, j, a, b, c, x, y, z, cnt: Integer;
   cmp, best: Double;
-  smps: TSmallIntDynArray;
+  smps: TSmallIntDynArray2;
+  mods: TIntegerDynArray;
+  res: TDoubleDynArray;
 begin
   // find the best looping point in a chunk
 
-  SetLength(smps, encoder.chunkSize);
-  rawModulo := encoder.chunkSize;
-  best := MaxDouble;
+  if index and $0f = 0 then Write('.');
 
-  for i := encoder.chunkSize - PhaseSearch * 2 downto encoder.chunkSize div 2 do
+  SetLength(smps, encoder.chunkSize, encoder.chunkSize);
+  SetLength(mods, encoder.chunkSize);
+  cnt := 0;
+
+  for i := encoder.chunkSize - PhaseSearch - 1 downto 16 do
   begin
 
     x := rawData[0];
     y := rawData[PhaseSearch];
     z := rawData[PhaseSearch * 2];
 
-    a := rawData[i - 1];
-    b := rawData[i - 1 + PhaseSearch];
-    c := rawData[i - 1 + PhaseSearch * 2];
+    a := rawData[i - PhaseSearch];
+    b := rawData[i];
+    c := rawData[i + PhaseSearch];
 
-    cmp := TEncoder.ComputeJoinPenalty(x, y, z, a, b, c);
-    if cmp > 0.5 then
+    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c) then
       Continue;
 
     for j := 0 to encoder.chunkSize - 1 do
-      smps[j] := rawData[j mod i];
+      smps[cnt, j] := rawData[j mod i];
 
-    cmp := encoder.ComputeEAQUAL(encoder.chunkSize, rawData, smps);
+    mods[cnt] := i;
+
+    Inc(cnt);
+  end;
+
+  SetLength(smps, cnt);
+  SetLength(mods, cnt);
+
+  res := encoder.ComputeEAQUALMulti(encoder.chunkSize, False, rawData, smps);
+
+  rawModulo := encoder.chunkSize;
+  best := MaxDouble;
+
+  for i := 0 to cnt - 1 do
+  begin
+    cmp := res[i];
 
     if cmp < best then
     begin
       best := cmp;
-      rawModulo := i;
+      rawModulo := mods[i];
     end;
   end;
 end;
 
 procedure TChunk.FindBestJoinPhase(prevChunk: TChunk);
 var
-  i, a, b, c, x, y, z, pmd, md: Integer;
+  i, j, a, b, c, x, y, z, pmd, md: Integer;
   cmp: Double;
+  smpOri, smpItr: TSmallIntDynArray;
+  checkJP: Boolean;
 begin
   // find the best phase shift to join the chunks
+
+  if index and $0f = 0 then Write('.');
+
+  pmd := prevChunk.reducedChunk.rawModulo;
+  md := reducedChunk.rawModulo;
+
+  SetLength(smpOri, encoder.chunkSize * 2);
+  move(prevChunk.rawData[0], smpOri[0], encoder.chunkSize);
+  move(rawData[0], smpOri[encoder.chunkSize], encoder.chunkSize);
+
+  SetLength(smpItr, encoder.chunkSize * 2);
+  for j := 0 to encoder.chunkSize - 1 do
+    smpItr[j] := prevChunk.reducedChunk.rawData[j mod pmd];
 
   joinPhase := 0;
   joinPenalty := Infinity;
   exit;
 
-  pmd := prevChunk.reducedChunk.rawModulo;
-  md := reducedChunk.rawModulo;
+  checkJP := md <> encoder.chunkSize;
 
-  for i := 0 to md - 1 do
-  begin
-    x := prevChunk.reducedChunk.rawData[(encoder.chunkSize) mod pmd];
-    y := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch) mod pmd];
-    z := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch * 2) mod pmd];
-
-    a := reducedChunk.rawData[i];
-    b := reducedChunk.rawData[(i + PhaseSearch) mod md];
-    c := reducedChunk.rawData[(i + PhaseSearch * 2) mod md];
-
-    cmp := TEncoder.ComputeJoinPenalty(x, y, z, a, b, c);
-
-    if cmp < joinPenalty then
+  repeat
+    for i := 0 to md - 1 do
     begin
-      joinPenalty := cmp;
-      joinPhase := i;
-    end;
-  end;
+      x := prevChunk.reducedChunk.rawData[(encoder.chunkSize) mod pmd];
+      y := prevChunk.reducedChunk.rawData[(encoder.chunkSize +
+      PhaseSearch) mod pmd];
+      z := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch * 2) mod pmd];
 
-  assert(not IsInfinite(joinPenalty));
+      a := reducedChunk.rawData[i];
+      b := reducedChunk.rawData[(i + PhaseSearch) mod md];
+      c := reducedChunk.rawData[(i + PhaseSearch * 2) mod md];
+
+      if checkJP and not TEncoder.CheckJoinPenalty(x, y, z, a, b, c) then
+        Continue;
+
+      for j := 0 to encoder.chunkSize - 1 do
+        smpItr[j + encoder.chunkSize] := reducedChunk.rawData[(j + i) mod md];
+
+      cmp := encoder.ComputeEAQUAL(encoder.chunkSize * 2, False, smpOri, smpItr);
+
+      if cmp < joinPenalty then
+      begin
+        joinPenalty := cmp;
+        joinPhase := i;
+      end;
+    end;
+
+    checkJP := False;
+  until not IsInfinite(joinPenalty);
+
 end;
 
 { TEncoder }
@@ -282,8 +327,11 @@ procedure TEncoder.makeChunks;
   begin
     chunk:= chunkList[AIndex];
 
-    chunk.FindBestModulo;
     chunk.ComputeDCT;
+    //chunk.dct[0] := 0;
+    //chunk.weightedDct[0] := 0;
+    //chunk.ComputeInvDCT;
+    chunk.FindBestModulo;
   end;
 var
   i: Integer;
@@ -395,14 +443,16 @@ var
   i, j: Integer;
   penalty: Double;
   chunk: TChunk;
+  phase: Integer;
 begin
   WriteLn('makeDstData');
 
-  //for i := 1 to chunkList.Count - 1 do
+  //for i := 1 to chunkList.Count div 3 - 1 do
   //  chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
 
   ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
 
+  phase := 100;
   penalty := 0.0;
   SetLength(dstData, Length(srcData));
   FillWord(dstData[0], Length(srcData), 0);
@@ -413,8 +463,12 @@ begin
     if not IsInfinite(chunk.joinPenalty) then
       penalty += chunk.joinPenalty;
 
+    writeln(chunk.reducedChunk.rawModulo);
+
     for j := 0 to chunkSize - 1 do
-      dstData[i * chunkSize + j] := chunk.reducedChunk.rawData[(chunk.joinPhase + j) mod chunk.reducedChunk.rawModulo];
+      dstData[i * chunkSize + j] := chunk.reducedChunk.rawData[({phase + chunk.joinPhase +} j) mod chunk.reducedChunk.rawModulo];
+
+    //phase += chunk.reducedChunk.rawModulo - chunk.joinPhase;
   end;
 
   WriteLn('avg join penalty: ', FloatToStr(penalty / chunkList.Count));
@@ -482,17 +536,19 @@ begin
   Result := Sign(coeff) * power(Abs(coeff), 0.707);
 end;
 
-class function TEncoder.ComputeJoinPenalty(x, y, z, a, b, c: Double): Double;
+class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double): Boolean;
 var
   dStart, dEnd: Double;
 begin
   dStart := -1.5 * x + 2.0 * y - 0.5 * z;
   dEnd := -1.5 * a + 2.0 * b - 0.5 * c;
 
-  Result := Div0(sqr(dEnd - dStart), sqr(dEnd) + sqr(dStart)) + Div0(sqr(b - x), sqr(b) + sqr(x));
+  Result := (InRange(x, a, c) or InRange(x, c, a)) and (Sign(dStart) * Sign(dEnd) <> -1);
+
+//  Result := Div0(sqr(dEnd - dStart), sqr(dEnd) + sqr(dStart)) + Div0(sqr(b - x), sqr(b) + sqr(x));
 end;
 
-function TEncoder.ComputeEAQUAL(chunkSz: Integer; const smpRef, smpTst: TSmallIntDynArray): Double;
+function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
 var
   FNRef, FNTst: String;
   fs: TFileStream;
@@ -519,7 +575,58 @@ begin
     fs.Free;
   end;
 
-  Result := -DoExternalEAQUAL(FNRef, FNTst, False);
+  Result := DoExternalEAQUAL(FNRef, FNTst, UseDIX);
+
+  DeleteFile(FNRef);
+  DeleteFile(FNTst);
+end;
+
+function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray; smpTst: TSmallIntDynArray2
+  ): TDoubleDynArray;
+var
+  i, j: Integer;
+  FNRef, FNTst: String;
+  fs: TFileStream;
+begin
+  if Length(smpTst) = 0 then
+    Exit(nil);
+
+  FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
+  FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
+
+  fs := TFileStream.Create(FNRef, fmCreate);
+  try
+    fs.WriteBuffer(srcHeader[0], $28);
+    fs.WriteDWord(EAQUALBLockSize * Length(smpTst) - 1);
+    for i := 0 to High(smpTst) do
+    begin
+      for j := 0 to EAQUALBLockSize div (SizeOf(SmallInt) * chunkSz) - 1 do
+        fs.WriteBuffer(smpRef[0], chunkSz * SizeOf(SmallInt));
+      //for j := 0 to EAQUALBLockSize div SizeOf(SmallInt) - chunkSz - 1 do
+      //  fs.WriteWord(0);
+    end;
+  finally
+    fs.Free;
+  end;
+
+  fs := TFileStream.Create(FNTst, fmCreate);
+  try
+    fs.WriteBuffer(srcHeader[0], $28);
+    fs.WriteDWord(EAQUALBLockSize * Length(smpTst) - 1);
+    for i := 0 to High(smpTst) do
+    begin
+      for j := 0 to EAQUALBLockSize div (SizeOf(SmallInt) * chunkSz) - 1 do
+        fs.WriteBuffer(smpTst[i, 0], chunkSz * SizeOf(SmallInt));
+      //for j := 0 to EAQUALBLockSize div SizeOf(SmallInt) - chunkSz - 1 do
+      //  fs.WriteWord(0);
+    end;
+  finally
+    fs.Free;
+  end;
+
+  Result := DoExternalEAQUALMulti(FNRef, FNTst, UseDIX);
+
+  Assert(Length(result) = Length(smpTst));
 
   DeleteFile(FNRef);
   DeleteFile(FNTst);
@@ -539,7 +646,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk size] [iter count 1-inf]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk shift 4-10] [iter count 1-inf]');
       WriteLn;
       Exit;
     end;
@@ -547,7 +654,7 @@ begin
     enc := TEncoder.Create;
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-    enc.chunkSize := StrToIntDef(ParamStr(4), 256);
+    enc.chunkSize := 1 shl EnsureRange(StrToIntDef(ParamStr(4), 8), 4, 10);
     enc.restartCount := StrToIntDef(ParamStr(5), 4);
 
     try
