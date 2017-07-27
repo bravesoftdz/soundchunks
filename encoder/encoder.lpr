@@ -534,32 +534,6 @@ begin
 end;
 
 function TEncoder.DoHPFilter(chunkSz: Integer; const samples: TSmallIntDynArray): TSmallIntDynArray;
-//var
-//  hpf: TFilterFIRHPWin;
-//  i: Integer;
-//begin
-//  SetLength(Result, Length(samples));
-//  hpf := TFilterFIRHPWin.Create(nil);
-//  try
-//    hpf.SampleRate := sampleRate;
-//    hpf.FreqCut1 := sampleRate / chunkSz;
-//    hpf.Order := 10000;
-//    hpf.WindowsType := TWinHanning.Create(nil);
-//    hpf.SetupFilter;
-//
-//    for i := 0 to hpf.Order - 1 do
-//      hpf.FilterFilter(samples[i]);
-//
-//    for i := 0 to High(samples) - hpf.Order do
-//      Result[i] := make16BitSample(hpf.FilterFilter(samples[i + hpf.Order]));
-//
-//    for i := Length(samples) - hpf.Order to High(samples) do
-//      Result[i] := make16BitSample(hpf.FilterFilter(0));
-//
-//  finally
-//    hpf.Free;
-//  end;
-
 var
   fc, b, sinc, win, sum: Double;
   i, N: Integer;
@@ -567,8 +541,9 @@ var
   ins, res: TReal1DArray;
 begin
   fc := 1 / chunkSz;
-  b := fc * 0.1;
+  b := fc * 0.01;
 
+  fc += b;
   N := ceil(4 / b);
   if (N mod 2) = 0 then N += 1;
   SetLength(h, N);
@@ -592,6 +567,8 @@ begin
 
   h[(N - 1) div 2] += 1;
 
+  writeln('DoHPFilter ', FloatToStr(sampleRate * fc), ' ', N);
+
   SetLength(ins, Length(samples));
   for i := 0 to High(samples) do
     ins[i] := samples[i];
@@ -600,8 +577,7 @@ begin
 
   SetLength(Result, Length(samples));
   for i := 0 to High(samples) do
-    Result[i] := make16BitSample(res[i]);
-
+    Result[i] := make16BitSample(res[i + (N - 1) div 2]);
 end;
 
 class function TEncoder.CompareFFT(firstCoeff, lastCoeff: Integer; compress: Boolean; const fftA, fftB: TDoubleDynArray): Double;
