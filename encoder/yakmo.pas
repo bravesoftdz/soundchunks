@@ -7,12 +7,9 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils;
 
-const
-  EAQUALBLockSize = 2048;
-
 procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
-function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean): Double;
-function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean): TDoubleDynArray;
+function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean; BlockLength: Integer): Double;
+function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
 implementation
 
@@ -76,7 +73,7 @@ begin
               Inc(StderrBytesRead, StderrNumBytes);
           end
         else
-          Sleep(100);
+          Sleep(40);
       end;
     // Get left output after end of execution
     available:=P.Output.NumBytesAvailable;
@@ -162,7 +159,7 @@ begin
 end;
 
 
-function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean): Double;
+function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean; BlockLength: Integer): Double;
 var
   i, Clu, Inp: Integer;
   Line, Output, ErrOut: String;
@@ -176,7 +173,7 @@ begin
   try
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'eaqual.exe';
-    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '"');
+    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blklen ' + IntToStr(BlockLength));
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
@@ -201,7 +198,7 @@ begin
   end;
 end;
 
-function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean): TDoubleDynArray;
+function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 var
   i: Integer;
   Line, Output, ErrOut, OutFN: String;
@@ -217,7 +214,7 @@ begin
 
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'eaqual.exe';
-    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blockout ' + IfThen(UseDIX, 'DI', 'ODG') + ' "' + OutFN + '"');
+    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blockout ' + IfThen(UseDIX, 'DI', 'ODG') + ' "' + OutFN + '" -blklen ' + IntToStr(BlockLength));
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
@@ -233,12 +230,11 @@ begin
     OutSL.LineBreak := #13#10;
     OutSL.LoadFromFile(OutFN);
 
-    SetLength(Result, OutSL.Count - 2);
-
-    for i := 2 to OutSL.Count - 1 do
+    SetLength(Result, BlockCount);
+    for i := 0 to BlockCount - 1 do
     begin
-      Line := OutSL[i];
-      Result[i - 2] := -StrToFloatDef(Line, 0.0);
+      Line := OutSL[i * 2 + 2];
+      Result[i] := -StrToFloatDef(Line, 0.0);
     end;
 
     DeleteFile(OutFN);

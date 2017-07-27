@@ -66,7 +66,7 @@ type
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
     class function CompressDCT(coeff: Double): Double;
-    class function CheckJoinPenalty(x, y, z, a, b, c: Double): Boolean;
+    class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
 
     constructor Create;
     destructor Destroy; override;
@@ -156,6 +156,7 @@ var
   smps: TSmallIntDynArray2;
   mods: TIntegerDynArray;
   res: TDoubleDynArray;
+  checkJP: Boolean;
 begin
   // find the best looping point in a chunk
 
@@ -165,18 +166,18 @@ begin
   SetLength(mods, encoder.chunkSize);
   cnt := 0;
 
-  for i := encoder.chunkSize - PhaseSearch - 1 downto 16 do
+  for i := encoder.chunkSize - PhaseSearch * 2 - 1 downto encoder.chunkSize div 8 do
   begin
 
     x := rawData[0];
     y := rawData[PhaseSearch];
     z := rawData[PhaseSearch * 2];
 
-    a := rawData[i - PhaseSearch];
-    b := rawData[i];
-    c := rawData[i + PhaseSearch];
+    a := rawData[i];
+    b := rawData[i + PhaseSearch];
+    c := rawData[i + PhaseSearch * 2];
 
-    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c) then
+    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, True) then
       Continue;
 
     for j := 0 to encoder.chunkSize - 1 do
@@ -209,10 +210,13 @@ end;
 
 procedure TChunk.FindBestJoinPhase(prevChunk: TChunk);
 var
-  i, j, a, b, c, x, y, z, pmd, md: Integer;
+  i, j, a, b, c, x, y, z, pmd, md, cnt: Integer;
   cmp: Double;
-  smpOri, smpItr: TSmallIntDynArray;
   checkJP: Boolean;
+  smpOri: TSmallIntDynArray;
+  smpItr: TSmallIntDynArray2;
+  phs: TIntegerDynArray;
+  res: TDoubleDynArray;
 begin
   // find the best phase shift to join the chunks
 
@@ -222,49 +226,61 @@ begin
   md := reducedChunk.rawModulo;
 
   SetLength(smpOri, encoder.chunkSize * 2);
-  move(prevChunk.rawData[0], smpOri[0], encoder.chunkSize);
-  move(rawData[0], smpOri[encoder.chunkSize], encoder.chunkSize);
+  SetLength(smpItr, encoder.chunkSize, encoder.chunkSize * 2);
+  SetLength(phs, encoder.chunkSize);
 
-  SetLength(smpItr, encoder.chunkSize * 2);
-  for j := 0 to encoder.chunkSize - 1 do
-    smpItr[j] := prevChunk.reducedChunk.rawData[j mod pmd];
+  move(prevChunk.rawData[0], smpOri[0], encoder.chunkSize * SizeOf(SmallInt));
+  move(rawData[0], smpOri[encoder.chunkSize], encoder.chunkSize * SizeOf(SmallInt));
 
-  joinPhase := 0;
-  joinPenalty := Infinity;
-  exit;
+  for i := 0 to encoder.chunkSize - 1 do
+    for j := 0 to encoder.chunkSize - 1 do
+      smpItr[i, j] := prevChunk.reducedChunk.rawData[j mod pmd];
 
-  checkJP := md <> encoder.chunkSize;
-
+  checkJP := True;
   repeat
+    cnt := 0;
+
     for i := 0 to md - 1 do
     begin
       x := prevChunk.reducedChunk.rawData[(encoder.chunkSize) mod pmd];
-      y := prevChunk.reducedChunk.rawData[(encoder.chunkSize +
-      PhaseSearch) mod pmd];
+      y := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch) mod pmd];
       z := prevChunk.reducedChunk.rawData[(encoder.chunkSize + PhaseSearch * 2) mod pmd];
 
       a := reducedChunk.rawData[i];
       b := reducedChunk.rawData[(i + PhaseSearch) mod md];
       c := reducedChunk.rawData[(i + PhaseSearch * 2) mod md];
 
-      if checkJP and not TEncoder.CheckJoinPenalty(x, y, z, a, b, c) then
+      if (i <> 0) and not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, checkJP) then
         Continue;
 
       for j := 0 to encoder.chunkSize - 1 do
-        smpItr[j + encoder.chunkSize] := reducedChunk.rawData[(j + i) mod md];
+        smpItr[cnt, j + encoder.chunkSize] := reducedChunk.rawData[(j + i) mod md];
 
-      cmp := encoder.ComputeEAQUAL(encoder.chunkSize * 2, False, smpOri, smpItr);
-
-      if cmp < joinPenalty then
-      begin
-        joinPenalty := cmp;
-        joinPhase := i;
-      end;
+      phs[cnt] := i;
+      Inc(cnt);
     end;
 
     checkJP := False;
-  until not IsInfinite(joinPenalty);
+  until cnt <> 0;
 
+  SetLength(smpItr, cnt);
+  SetLength(phs, cnt);
+
+  res := encoder.ComputeEAQUALMulti(encoder.chunkSize * 2, False, smpOri, smpItr);
+
+  joinPhase := 0;
+  joinPenalty := Infinity;
+
+  for i := 0 to cnt - 1 do
+  begin
+    cmp := res[i];
+
+    if cmp < joinPenalty then
+    begin
+      joinPenalty := cmp;
+      joinPhase := phs[i];
+    end;
+  end;
 end;
 
 { TEncoder }
@@ -361,6 +377,7 @@ begin
   end;
 
   ProcThreadPool.DoParallelLocalProc(@DoDCT, 0, chunkList.Count - 1, nil);
+  WriteLn;
 end;
 
 procedure TEncoder.kMeansReduce;
@@ -447,12 +464,13 @@ var
 begin
   WriteLn('makeDstData');
 
-  //for i := 1 to chunkList.Count div 3 - 1 do
+  //for i := 1 to chunkList.Count - 1 do
   //  chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
-
+  //
   ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
+  WriteLn;
 
-  phase := 100;
+  phase := 0;
   penalty := 0.0;
   SetLength(dstData, Length(srcData));
   FillWord(dstData[0], Length(srcData), 0);
@@ -463,12 +481,12 @@ begin
     if not IsInfinite(chunk.joinPenalty) then
       penalty += chunk.joinPenalty;
 
-    writeln(chunk.reducedChunk.rawModulo);
+    writeln(chunk.reducedChunk.rawModulo, #9, chunk.joinPhase, #9, phase);
 
     for j := 0 to chunkSize - 1 do
-      dstData[i * chunkSize + j] := chunk.reducedChunk.rawData[({phase + chunk.joinPhase +} j) mod chunk.reducedChunk.rawModulo];
+      dstData[i * chunkSize + j] := chunk.reducedChunk.rawData[(phase + chunk.joinPhase + j) mod chunk.reducedChunk.rawModulo];
 
-    //phase += chunk.reducedChunk.rawModulo - chunk.joinPhase;
+//    phase += chunk.joinPhase;
   end;
 
   WriteLn('avg join penalty: ', FloatToStr(penalty / chunkList.Count));
@@ -536,46 +554,46 @@ begin
   Result := Sign(coeff) * power(Abs(coeff), 0.707);
 end;
 
-class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double): Boolean;
+class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
 var
   dStart, dEnd: Double;
 begin
   dStart := -1.5 * x + 2.0 * y - 0.5 * z;
   dEnd := -1.5 * a + 2.0 * b - 0.5 * c;
 
-  Result := (InRange(x, a, c) or InRange(x, c, a)) and (Sign(dStart) * Sign(dEnd) <> -1);
-
-//  Result := Div0(sqr(dEnd - dStart), sqr(dEnd) + sqr(dStart)) + Div0(sqr(b - x), sqr(b) + sqr(x));
+  Result := Sign(dStart) * Sign(dEnd) <> -1;
+  if TestRange and Result then
+    Result := InRange(y, a, c) or InRange(y, c, a);
 end;
 
 function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
 var
   FNRef, FNTst: String;
-  fs: TFileStream;
+  ms: TMemoryStream;
 begin
 
   FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
   FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
 
-  fs := TFileStream.Create(FNRef, fmCreate);
+  ms := TMemoryStream.Create;
   try
-    fs.WriteBuffer(srcHeader[0], $28);
-    fs.WriteDWord(chunkSz * SizeOf(SmallInt));
-    fs.WriteBuffer(smpRef[0], chunkSz * SizeOf(SmallInt));
+    ms.Write(srcHeader[0], $28);
+    ms.WriteDWord(chunkSz * SizeOf(SmallInt));
+    ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
+
+    ms.SaveToFile(FNRef);
+    ms.Clear;
+
+    ms.Write(srcHeader[0], $28);
+    ms.WriteDWord(chunkSz * SizeOf(SmallInt));
+    ms.Write(smpTst[0], chunkSz * SizeOf(SmallInt));
+
+    ms.SaveToFile(FNTst);
   finally
-    fs.Free;
+    ms.Free;
   end;
 
-  fs := TFileStream.Create(FNTst, fmCreate);
-  try
-    fs.WriteBuffer(srcHeader[0], $28);
-    fs.WriteDWord(chunkSz * SizeOf(SmallInt));
-    fs.WriteBuffer(smpTst[0], chunkSz * SizeOf(SmallInt));
-  finally
-    fs.Free;
-  end;
-
-  Result := DoExternalEAQUAL(FNRef, FNTst, UseDIX);
+  Result := DoExternalEAQUAL(FNRef, FNTst, UseDIX, chunkSz * 2);
 
   DeleteFile(FNRef);
   DeleteFile(FNTst);
@@ -586,47 +604,45 @@ function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const sm
 var
   i, j: Integer;
   FNRef, FNTst: String;
-  fs: TFileStream;
+  zeroes: TSmallIntDynArray;
+  ms: TMemoryStream;
 begin
   if Length(smpTst) = 0 then
     Exit(nil);
 
+  SetLength(zeroes, chunkSz);
+  FillWord(zeroes[0], chunkSz, 0);
+
   FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
   FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
 
-  fs := TFileStream.Create(FNRef, fmCreate);
+  ms := TMemoryStream.Create;
   try
-    fs.WriteBuffer(srcHeader[0], $28);
-    fs.WriteDWord(EAQUALBLockSize * Length(smpTst) - 1);
+    ms.Write(srcHeader[0], $28);
+    ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
     for i := 0 to High(smpTst) do
     begin
-      for j := 0 to EAQUALBLockSize div (SizeOf(SmallInt) * chunkSz) - 1 do
-        fs.WriteBuffer(smpRef[0], chunkSz * SizeOf(SmallInt));
-      //for j := 0 to EAQUALBLockSize div SizeOf(SmallInt) - chunkSz - 1 do
-      //  fs.WriteWord(0);
+      ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
+      ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
     end;
-  finally
-    fs.Free;
-  end;
 
-  fs := TFileStream.Create(FNTst, fmCreate);
-  try
-    fs.WriteBuffer(srcHeader[0], $28);
-    fs.WriteDWord(EAQUALBLockSize * Length(smpTst) - 1);
+    ms.SaveToFile(FNRef);
+    ms.Clear;
+
+    ms.Write(srcHeader[0], $28);
+    ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
     for i := 0 to High(smpTst) do
     begin
-      for j := 0 to EAQUALBLockSize div (SizeOf(SmallInt) * chunkSz) - 1 do
-        fs.WriteBuffer(smpTst[i, 0], chunkSz * SizeOf(SmallInt));
-      //for j := 0 to EAQUALBLockSize div SizeOf(SmallInt) - chunkSz - 1 do
-      //  fs.WriteWord(0);
+      ms.Write(smpTst[i, 0], chunkSz * SizeOf(SmallInt));
+      ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
     end;
+
+    ms.SaveToFile(FNTst);
   finally
-    fs.Free;
+    ms.Free;
   end;
 
-  Result := DoExternalEAQUALMulti(FNRef, FNTst, UseDIX);
-
-  Assert(Length(result) = Length(smpTst));
+  Result := DoExternalEAQUALMulti(FNRef, FNTst, UseDIX, Length(smpTst), chunkSz * 2);
 
   DeleteFile(FNRef);
   DeleteFile(FNTst);
@@ -646,7 +662,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk shift 4-10] [iter count 1-inf]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk size] [iter count 1-inf]');
       WriteLn;
       Exit;
     end;
@@ -654,7 +670,7 @@ begin
     enc := TEncoder.Create;
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-    enc.chunkSize := 1 shl EnsureRange(StrToIntDef(ParamStr(4), 8), 4, 10);
+    enc.chunkSize := EnsureRange(StrToIntDef(ParamStr(4), 8), 16, 4096);
     enc.restartCount := StrToIntDef(ParamStr(5), 4);
 
     try
