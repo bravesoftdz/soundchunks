@@ -8,7 +8,7 @@ uses
   Classes, SysUtils, Types, Process, strutils;
 
 procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
-function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean; BlockLength: Integer): Double;
+function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
 implementation
@@ -159,7 +159,7 @@ begin
 end;
 
 
-function DoExternalEAQUAL(AFNRef, AFNTest: String; UseDIX: Boolean; BlockLength: Integer): Double;
+function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 var
   i, Clu, Inp: Integer;
   Line, Output, ErrOut: String;
@@ -182,6 +182,9 @@ begin
 
     OutSL.LineBreak := #13#10;
     OutSL.Text := Output;
+
+    if PrintStats then
+      WriteLn(Output);
 
     for i := 0 to OutSL.Count - 1 do
     begin

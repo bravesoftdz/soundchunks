@@ -2,37 +2,43 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, Types, fgl, MTProcs, math, yakmo, fft, ap, conv;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, conv;
 
 const
   PhaseSearch = 1;
+  BandCount = 4;
+  LowCut = 30.0;
+  HighCut = 18000.0;
 
 type
   TSmallIntDynArray2 = array of TSmallIntDynArray;
+  TDoubleDynArray2 = array of TDoubleDynArray;
 
   TEncoder = class;
+  TBand = class;
 
   { TChunk }
 
   TChunk = class
   public
     encoder: TEncoder;
+    band: TBand;
+    reducedChunk: TChunk;
 
     index: Integer;
     srcModulo: Integer;
-    srcData: TSmallIntDynArray;
-    reducedChunk: TChunk;
+
+    srcData: TDoubleDynArray;
     dct: TDoubleDynArray;
-    weightedDct: TDoubleDynArray;
 
     joinPhase: Integer;
     joinPenalty: Double;
     dctAddCount: Integer;
 
-    constructor Create(enc: TEncoder; idx: Integer);
+    constructor Create(enc: TEncoder; bnd: TBand; idx: Integer);
 
     procedure ComputeDCT;
-    procedure ComputeInvDCT;
+    procedure InitDCTAdd;
     procedure AddToDCT(ch: TChunk);
     procedure FinalizeDCTAdd;
 
@@ -42,29 +48,51 @@ type
 
   TChunkList = specialize TFPGObjectList<TChunk>;
 
+  { TBand }
+
+  TBand = class
+  public
+    encoder: TEncoder;
+
+    chunkSize: Integer;
+    index: Integer;
+    fcl, fch: Double;
+
+    desiredChunkCount: Integer;
+    srcData: TDoubleDynArray;
+    dstData: TDoubleDynArray;
+    chunkFreqs: TDoubleDynArray;
+
+    chunkList: TChunkList;
+    reducedChunks: TChunkList;
+
+    constructor Create(enc: TEncoder; idx: Integer);
+    destructor Destroy; override;
+
+    procedure MakeChunks;
+    procedure KMeansReduce;
+    procedure MakeDstData;
+  end;
+
   { TEncoder }
 
   TEncoder = class
   public
-    chunkSize: Integer;
     quality: Double;
-    desiredChunkCount: Integer;
     restartCount: Integer;
     sampleRate: Integer;
+    minChunkSize: Integer;
 
     srcHeader: array[$00..$2b] of Byte;
-    srcData: TSmallIntDynArray;
+    srcData: TDoubleDynArray;
     srcDataCount: Integer;
     dstData: TSmallIntDynArray;
-    highPassData: TSmallIntDynArray;
-    chunkList: TChunkList;
-    reducedChunks: TChunkList;
-    chunkFreqs: TDoubleDynArray;
-    chunkWgtAtts: TDoubleDynArray;
+
+    bands: array[0..BandCount - 1] of TBand;
 
     class function make16BitSample(smp: Double): SmallInt;
-    class function ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
-    class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
+    class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
     class function CompressDCT(coeff: Double): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
@@ -72,17 +100,17 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    procedure kMeansReduce;
     procedure load(fn: String);
-    procedure makeChunks;
-    procedure makeDstData;
+    procedure MakeBands;
+    procedure MakeDstData;
     procedure save(fn: String);
 
-    function DoHPFilter(chunkSz: Integer; const samples: TSmallIntDynArray): TSmallIntDynArray;
+    function DoFilter(fc, transFactor: Double; HighPass: Boolean; chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
 
-    function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
-    function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray;
-      smpTst: TSmallIntDynArray2): TDoubleDynArray;
+    function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
+    function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
+      smpTst: TDoubleDynArray2): TDoubleDynArray;
   end;
 
 function Div0(x, y: Double): Double; inline;
@@ -92,48 +120,212 @@ begin
     Result := x / y;
 end;
 
+constructor TBand.Create(enc: TEncoder; idx: Integer);
+var i: Integer;
+begin
+  encoder := enc;
+  index := idx;
+
+  fcl := 0.5;
+  for i := 0 to BandCount - 1 - idx do
+  begin
+    fch := fcl;
+    fcl /= BandCount;
+  end;
+
+  if idx = 0 then
+    fcl := LowCut / encoder.sampleRate;
+  if idx = BandCount - 1 then
+    fch := HighCut / encoder.sampleRate;
+
+  chunkList := TChunkList.Create;
+  reducedChunks := TChunkList.Create;
+end;
+
+destructor TBand.Destroy;
+begin
+  chunkList.Free;
+  reducedChunks.Free;
+
+  inherited Destroy;
+end;
+
+procedure TBand.MakeChunks;
+var
+  i: Integer;
+  chunk: TChunk;
+  chunkCount: Integer;
+  fsq, dbAtt: Double;
+begin
+  chunkSize := 1;
+  while fcl < 1 / chunkSize do chunkSize *= 2;
+  chunkSize := max(encoder.minChunkSize, chunkSize);
+
+  chunkCount := (encoder.srcDataCount - 1) div chunkSize + 1;
+
+  fsq := (sqr(fcl * encoder.sampleRate) + sqr(fch * encoder.sampleRate)) * 0.5;
+  dbAtt := sqr(12194.0) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)));
+
+  desiredChunkCount := round(chunkCount * encoder.quality * dbAtt);
+
+  WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,')');
+
+  srcData := encoder.DoBPFilter(fcl, fch, 0.1, chunkSize, encoder.srcData);
+
+  SetLength(chunkFreqs, chunkSize);
+  for i := 0 to chunkSize - 1 do
+    chunkFreqs[i] := i * encoder.sampleRate / (chunkSize - 1) / 4.0;
+
+  chunkList.Capacity := chunkCount;
+  for i := 0 to chunkCount - 1 do
+  begin
+    chunk := TChunk.Create(encoder, Self, i);
+    chunkList.Add(chunk);
+    chunk.ComputeDCT;
+    chunk.FindBestModulo;
+  end;
+end;
+
+procedure TBand.KMeansReduce;
+var
+  XYC: TIntegerDynArray;
+
+  procedure DoXYC(AIndex: Integer);
+  var
+    i, First: Integer;
+    reducedChunk: TChunk;
+  begin
+    First := -1;
+    for i := 0 to chunkList.Count - 1 do
+      if XYC[i] = AIndex then
+      begin
+        First := i;
+        Break;
+      end;
+
+    reducedChunk := reducedChunks[AIndex];
+    reducedChunk.InitDCTAdd;
+
+    if First <> -1 then
+      for i := 0 to chunkList.Count - 1 do
+        if XYC[i] = AIndex then
+        begin
+          reducedChunk.AddToDCT(chunkList[i]);
+          chunkList[i].reducedChunk := reducedChunk;
+        end;
+
+    reducedChunk.FinalizeDCTAdd;
+  end;
+
+var
+  FN, Line: String;
+  v1: Double;
+  Dataset: TStringList;
+  i, j : Integer;
+begin
+  //exit;
+
+  WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
+
+  FN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
+  Dataset := TStringList.Create;
+  Dataset.LineBreak := #10;
+
+  try
+    for i := 0 to chunkList.Count - 1 do
+    begin
+      Line := IntToStr(i) + ' ';
+      for j := 0 to chunkSize - 1 do
+      begin
+        v1 := chunkList[i].dct[j];
+        v1 := TEncoder.CompressDCT(v1);
+        Line := Line + Format('%d:%.12g ', [j, v1]);
+      end;
+      Dataset.Add(Line);
+    end;
+    Dataset.SaveToFile(FN);
+  finally
+    Dataset.Free;
+  end;
+
+  SetLength(XYC, chunkList.Count);
+  FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
+  DoExternalKMeans(FN, desiredChunkCount, encoder.RestartCount, False, XYC);
+
+  for i := 0 to desiredChunkCount - 1 do
+  begin
+    reducedChunks.Add(TChunk.Create(encoder, Self, 0));
+    DoXYC(i);
+  end;
+end;
+
+procedure TBand.MakeDstData;
+var
+  i, j: Integer;
+  chunk: TChunk;
+  phase: Integer;
+begin
+  WriteLn('MakeDstData #', index);
+
+  for i := 1 to chunkList.Count - 1 do
+    chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
+
+  phase := 0;
+  SetLength(dstData, Length(srcData));
+  FillQWord(dstData[0], Length(srcData), 0);
+  for i := 0 to chunkList.Count - 1 do
+  begin
+    chunk := chunkList[i];
+
+    //writeln(chunk.reducedChunk.srcModulo, #9, chunk.joinPhase, #9, phase);
+
+    for j := 0 to chunkSize - 1 do
+      dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[(phase + chunk.joinPhase + j) mod chunk.reducedChunk.srcModulo];
+
+    //phase := (phase + chunk.joinPhase) mod chunk.reducedChunk.srcModulo;
+  end;
+end;
+
 { TChunk }
 
-constructor TChunk.Create(enc: TEncoder; idx: Integer);
+constructor TChunk.Create(enc: TEncoder; bnd: TBand; idx: Integer);
 begin
   index := idx;
   encoder := enc;
-  srcModulo := encoder.chunkSize;
+  band := bnd;
+  srcModulo := band.chunkSize;
 
-  SetLength(srcData, encoder.chunkSize);
-  Move(encoder.highPassData[idx * encoder.chunkSize], srcData[0], encoder.chunkSize * SizeOf(SmallInt));
+  SetLength(srcData, band.chunkSize);
+  Move(band.srcData[idx * band.chunkSize], srcData[0], band.chunkSize * SizeOf(Double));
 
   reducedChunk := Self;
-  SetLength(dct, encoder.chunkSize);
-  SetLength(weightedDct, encoder.chunkSize);
+  SetLength(dct, band.chunkSize);
 end;
 
 procedure TChunk.ComputeDCT;
 var
   k: Integer;
-  dta: TSmallIntDynArray;
+  dta: TDoubleDynArray;
 begin
-  SetLength(dta, encoder.chunkSize);
+  SetLength(dta, band.chunkSize);
 
-  for k := 0 to encoder.chunkSize - 1 do
-    dta[k] := TEncoder.make16BitSample(srcData[k mod srcModulo]);
+  for k := 0 to band.chunkSize - 1 do
+    dta[k] := srcData[k mod srcModulo];
 
-  dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
-
-  for k := 0 to encoder.chunkSize - 1 do
-    weightedDct[k] := dct[k] * encoder.chunkWgtAtts[k];
+  dct := TEncoder.ComputeDCT(band.chunkSize, dta);
 end;
 
-procedure TChunk.ComputeInvDCT;
+procedure TChunk.InitDCTAdd;
 begin
-  srcData := TEncoder.ComputeInvDCT(encoder.chunkSize, dct);
+  dctAddCount := 0;
+  FillQWord(dct[0], band.chunkSize, 0);
 end;
 
 procedure TChunk.AddToDCT(ch: TChunk);
 var
   k: Integer;
 begin
-  for k := 0 to encoder.chunkSize - 1 do
+  for k := 0 to band.chunkSize - 1 do
     dct[k] += ch.dct[k];
   Inc(dctAddCount);
 end;
@@ -144,21 +336,20 @@ var
 begin
   if dctAddCount = 0 then Exit;
 
-  for k := 0 to encoder.chunkSize - 1 do
+  for k := 0 to band.chunkSize - 1 do
     dct[k] /= dctAddCount;
 
-  dctAddCount := 0;
-
-  ComputeInvDCT;
+  srcData := TEncoder.ComputeInvDCT(band.chunkSize, dct);
 
   FindBestModulo;
 end;
 
 procedure TChunk.FindBestModulo;
 var
-  i, j, a, b, c, x, y, z, cnt: Integer;
+  i, j, cnt: Integer;
+  a, b, c, x, y, z: Double;
   cmp, best: Double;
-  smps: TSmallIntDynArray2;
+  smps: TDoubleDynArray2;
   mods: TIntegerDynArray;
   res: TDoubleDynArray;
 begin
@@ -168,11 +359,11 @@ begin
 
   if index and $0f = 0 then Write('.');
 
-  SetLength(smps, encoder.chunkSize, encoder.chunkSize);
-  SetLength(mods, encoder.chunkSize);
+  SetLength(smps, band.chunkSize, band.chunkSize);
+  SetLength(mods, band.chunkSize);
   cnt := 0;
 
-  for i := encoder.chunkSize - PhaseSearch * 2 - 1 downto encoder.chunkSize div 8 do
+  for i := band.chunkSize - PhaseSearch * 2 - 1 downto band.chunkSize div 8 do
   begin
 
     x := srcData[0];
@@ -186,7 +377,7 @@ begin
     if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, True) then
       Continue;
 
-    for j := 0 to encoder.chunkSize - 1 do
+    for j := 0 to band.chunkSize - 1 do
       smps[cnt, j] := srcData[j mod i];
 
     mods[cnt] := i;
@@ -197,9 +388,9 @@ begin
   SetLength(smps, cnt);
   SetLength(mods, cnt);
 
-  res := encoder.ComputeEAQUALMulti(encoder.chunkSize, False, srcData, smps);
+  res := encoder.ComputeEAQUALMulti(band.chunkSize, False, srcData, smps);
 
-  srcModulo := encoder.chunkSize;
+  srcModulo := band.chunkSize;
   best := MaxDouble;
 
   for i := 0 to cnt - 1 do
@@ -216,11 +407,12 @@ end;
 
 procedure TChunk.FindBestJoinPhase(prevChunk: TChunk);
 var
-  i, j, a, b, c, x, y, z, pmd, md, cnt: Integer;
+  i, j, pmd, md, cnt: Integer;
+  a, b, c, x, y, z: Double;
   cmp: Double;
   checkJP: Boolean;
-  smpOri: TSmallIntDynArray;
-  smpItr: TSmallIntDynArray2;
+  smpOri: TDoubleDynArray;
+  smpItr: TDoubleDynArray2;
   phs: TIntegerDynArray;
   res: TDoubleDynArray;
 begin
@@ -233,15 +425,15 @@ begin
   pmd := prevChunk.reducedChunk.srcModulo;
   md := reducedChunk.srcModulo;
 
-  SetLength(smpOri, encoder.chunkSize * 2);
-  SetLength(smpItr, encoder.chunkSize, encoder.chunkSize * 2);
-  SetLength(phs, encoder.chunkSize);
+  SetLength(smpOri, band.chunkSize * 2);
+  SetLength(smpItr, band.chunkSize, band.chunkSize * 2);
+  SetLength(phs, band.chunkSize);
 
-  move(prevChunk.srcData[0], smpOri[0], encoder.chunkSize * SizeOf(SmallInt));
-  move(srcData[0], smpOri[encoder.chunkSize], encoder.chunkSize * SizeOf(SmallInt));
+  move(prevChunk.srcData[0], smpOri[0], band.chunkSize * SizeOf(Double));
+  move(srcData[0], smpOri[band.chunkSize], band.chunkSize * SizeOf(Double));
 
-  for i := 0 to encoder.chunkSize - 1 do
-    for j := 0 to encoder.chunkSize - 1 do
+  for i := 0 to band.chunkSize - 1 do
+    for j := 0 to band.chunkSize - 1 do
       smpItr[i, j] := prevChunk.reducedChunk.srcData[j mod pmd];
 
   checkJP := True;
@@ -250,9 +442,9 @@ begin
 
     for i := 0 to md - 1 do
     begin
-      x := prevChunk.reducedChunk.srcData[(encoder.chunkSize) mod pmd];
-      y := prevChunk.reducedChunk.srcData[(encoder.chunkSize + PhaseSearch) mod pmd];
-      z := prevChunk.reducedChunk.srcData[(encoder.chunkSize + PhaseSearch * 2) mod pmd];
+      x := prevChunk.reducedChunk.srcData[(band.chunkSize) mod pmd];
+      y := prevChunk.reducedChunk.srcData[(band.chunkSize + PhaseSearch) mod pmd];
+      z := prevChunk.reducedChunk.srcData[(band.chunkSize + PhaseSearch * 2) mod pmd];
 
       a := reducedChunk.srcData[i];
       b := reducedChunk.srcData[(i + PhaseSearch) mod md];
@@ -261,8 +453,8 @@ begin
       if (i <> 0) and not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, checkJP) then
         Continue;
 
-      for j := 0 to encoder.chunkSize - 1 do
-        smpItr[cnt, j + encoder.chunkSize] := reducedChunk.srcData[(j + i) mod md];
+      for j := 0 to band.chunkSize - 1 do
+        smpItr[cnt, j + band.chunkSize] := reducedChunk.srcData[(j + i) mod md];
 
       phs[cnt] := i;
       Inc(cnt);
@@ -274,7 +466,7 @@ begin
   SetLength(smpItr, cnt);
   SetLength(phs, cnt);
 
-  res := encoder.ComputeEAQUALMulti(encoder.chunkSize * 2, False, smpOri, smpItr);
+  res := encoder.ComputeEAQUALMulti(band.chunkSize * 2, False, smpOri, smpItr);
 
   joinPhase := 0;
   joinPenalty := Infinity;
@@ -296,16 +488,17 @@ end;
 procedure TEncoder.load(fn: String);
 var
   fs: TFileStream;
+  i: Integer;
 begin
   WriteLn('load ', fn);
   fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
   try
     fs.ReadBuffer(srcHeader[0], SizeOf(srcHeader));
     srcDataCount := (fs.Size - fs.Position) div 2;
-    SetLength(srcData, srcDataCount + chunkSize);
-    FillWord(srcData[0], srcDataCount + chunkSize, 0);
-
-    fs.ReadBuffer(srcData[0], srcDataCount * 2);
+    SetLength(srcData, srcDataCount + 65536);
+    FillQWord(srcData[0], srcDataCount + 65536, 0);
+    for i := 0 to srcDataCount - 1 do
+      srcData[i] := SmallInt(fs.ReadWord);
   finally
     fs.Free;
   end;
@@ -313,6 +506,25 @@ begin
   sampleRate := PInteger(@srcHeader[$18])^;
   writeln(sampleRate, ' Hz');
 end;
+
+procedure TEncoder.MakeBands;
+
+  procedure DoBand(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  begin
+    bands[AIndex].MakeChunks;
+    bands[AIndex].KMeansReduce;
+    bands[AIndex].MakeDstData;
+  end;
+
+var
+  i: Integer;
+begin
+  for i := 0 to BandCount - 1 do
+    bands[i] := TBand.Create(Self, i);
+
+  ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
+end;
+
 
 procedure TEncoder.save(fn: String);
 var
@@ -329,224 +541,26 @@ begin
   end;
 end;
 
-constructor TEncoder.Create;
-begin
-  chunkList := TChunkList.Create;
-  reducedChunks := TChunkList.Create;
-end;
-
-destructor TEncoder.Destroy;
-begin
-  chunkList.Free;
-  reducedChunks.Free;
-
-  inherited Destroy;
-end;
-
-procedure TEncoder.makeChunks;
-
-  procedure DoDCT(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  begin
-    chunkList[AIndex].ComputeDCT;
-    chunkList[AIndex].FindBestModulo;
-  end;
+function TEncoder.DoFilter(fc, transFactor: Double; HighPass: Boolean; chunkSz: Integer; const samples: TDoubleDynArray
+  ): TDoubleDynArray;
 var
-  i: Integer;
-  chunk: TChunk;
-  chunkCount: Integer;
-  fsq: Double;
-begin
-  chunkCount := (srcDataCount - 1) div chunkSize + 1;
-  desiredChunkCount := round(chunkCount * quality);
-
-  highPassData := DoHPFilter(chunkSize, srcData);
-
-  WriteLn('makeChunks ', chunkSize, ' * ', chunkCount);
-
-  SetLength(chunkWgtAtts, chunkSize);
-  SetLength(chunkFreqs, chunkSize);
-  for i := 0 to chunkSize - 1 do
-  begin
-    chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 4.0;
-    fsq := sqr(max(chunkFreqs[i], 20.0));
-    chunkWgtAtts[i] := sqr(12194.0) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)));
-  end;
-
-  chunkList.Capacity := chunkCount;
-  for i := 0 to chunkCount - 1 do
-  begin
-    chunk := TChunk.Create(Self, i);
-    chunkList.Add(chunk);
-  end;
-
-  ProcThreadPool.DoParallelLocalProc(@DoDCT, 0, chunkList.Count - 1, nil);
-  WriteLn;
-end;
-
-procedure TEncoder.kMeansReduce;
-var
-  XYC: TIntegerDynArray;
-
-  procedure DoXYC(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  var
-    i, First: Integer;
-    reducedChunk: TChunk;
-  begin
-    First := -1;
-    for i := 0 to chunkList.Count - 1 do
-      if XYC[i] = AIndex then
-      begin
-        First := i;
-        Break;
-      end;
-
-    reducedChunk := reducedChunks[AIndex];
-
-    if First <> -1 then
-      for i := 0 to chunkList.Count - 1 do
-        if XYC[i] = AIndex then
-        begin
-          reducedChunk.AddToDCT(chunkList[i]);
-          chunkList[i].reducedChunk := reducedChunk;
-        end;
-
-    reducedChunk.FinalizeDCTAdd;
-  end;
-
-var
-  FN, Line: String;
-  v1: Double;
-  Dataset: TStringList;
-  i, j : Integer;
-begin
-  WriteLn('kMeansReduce ', desiredChunkCount);
-
-  FN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
-  Dataset := TStringList.Create;
-  Dataset.LineBreak := #10;
-
-  try
-    for i := 0 to chunkList.Count - 1 do
-    begin
-      Line := IntToStr(i) + ' ';
-      for j := 0 to chunkSize - 1 do
-      begin
-        v1 := chunkList[i].dct[j];
-        v1 := CompressDCT(v1);
-        Line := Line + Format('%d:%.12g ', [j, v1]);
-      end;
-      Dataset.Add(Line);
-    end;
-    Dataset.SaveToFile(FN);
-  finally
-    Dataset.Free;
-  end;
-
-  SetLength(XYC, chunkList.Count);
-  FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, RestartCount, False, XYC);
-
-  for i := 0 to desiredChunkCount - 1 do
-    reducedChunks.Add(TChunk.Create(Self, 0));
-
-  ProcThreadPool.DoParallelLocalProc(@DoXYC, 0, desiredChunkCount - 1, nil);
-end;
-
-procedure TEncoder.makeDstData;
-
-  procedure DoFind(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  begin
-    chunkList[AIndex].FindBestJoinPhase(chunkList[AIndex - 1]);
-  end;
-
-var
-  i, j: Integer;
-  penalty: Double;
-  chunk: TChunk;
-  phase: Integer;
-begin
-  WriteLn('makeDstData');
-
-  //for i := 1 to chunkList.Count - 1 do
-  //  chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
-  //
-  ProcThreadPool.DoParallelLocalProc(@DoFind, 1, chunkList.Count - 1, nil);
-  WriteLn;
-
-  phase := 0;
-  penalty := 0.0;
-  SetLength(dstData, Length(srcData));
-  FillWord(dstData[0], Length(srcData), 0);
-  for i := 0 to chunkList.Count - 1 do
-  begin
-    chunk := chunkList[i];
-
-    if not IsInfinite(chunk.joinPenalty) then
-      penalty += chunk.joinPenalty;
-
-    writeln(chunk.reducedChunk.srcModulo, #9, chunk.joinPhase, #9, phase);
-
-    for j := 0 to chunkSize - 1 do
-      dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[(phase + chunk.joinPhase + j) mod chunk.reducedChunk.srcModulo];
-
-    //phase := (phase + chunk.joinPhase) mod chunk.reducedChunk.srcModulo;
-  end;
-
-  WriteLn('avg join penalty: ', FloatToStr(penalty / chunkList.Count));
-end;
-
-class function TEncoder.make16BitSample(smp: Double): SmallInt;
-begin
-  Result := EnsureRange(round(smp), Low(SmallInt), High(SmallInt));
-end;
-
-class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
-var
-  k, n: Integer;
-  sum, s: Double;
-begin
-  SetLength(Result, length(samples));
-  for k := 0 to chunkSz - 1 do
-  begin
-    sum := 0;
-    s := ifthen(k = 0, sqrt(0.5), 1.0);
-    for n := 0 to chunkSz - 1 do
-      sum += s * samples[n] * cos(pi * (n + 0.5) * k / chunkSz);
-    Result[k] := sum * sqrt (2.0 / chunkSz);
-  end;
-end;
-
-class function TEncoder.ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
-var
-  k, n: Integer;
-  sum, s: Double;
-begin
-  SetLength(Result, length(dct));
-  for n := 0 to chunkSz - 1 do
-  begin
-    sum := 0;
-    for k := 0 to chunkSz - 1 do
-    begin
-      s := ifthen(k = 0, sqrt(0.5), 1.0);
-      sum += s * dct[k] * cos (pi * (n + 0.5) * k / chunkSz);
-    end;
-    Result[n] := TEncoder.make16BitSample(sum * sqrt(2.0 / chunkSz));
-  end;
-end;
-
-function TEncoder.DoHPFilter(chunkSz: Integer; const samples: TSmallIntDynArray): TSmallIntDynArray;
-var
-  fc, b, sinc, win, sum: Double;
+  b, sinc, win, sum: Double;
   i, N: Integer;
   h: TReal1DArray;
-  ins, res: TReal1DArray;
 begin
-  fc := 1.0 / chunkSz;
-  b := fc * 0.001;
+  if (fc <= 0.0) and HighPass or (fc >=0.5) and not HighPass then
+  begin
+    Result := samples;
+    Exit;
+  end;
 
+  b := fc * transFactor;
   fc += b;
   N := ceil(4 / b);
   if (N mod 2) = 0 then N += 1;
+
+  //writeln('DoFilter ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
+
   SetLength(h, N);
   sum := 0;
   for i := 0 to N - 1 do
@@ -563,22 +577,106 @@ begin
     sum += h[i];
   end;
 
-  for i := 0 to N - 1 do
-    h[i] := -h[i] / sum;
+  if HighPass then
+  begin
+    for i := 0 to N - 1 do
+      h[i] := -h[i] / sum;
 
-  h[(N - 1) div 2] += 1;
+    h[(N - 1) div 2] += 1;
+  end
+  else
+  begin
+    for i := 0 to N - 1 do
+      h[i] := h[i] / sum;
+  end;
 
-  writeln('DoHPFilter ', FloatToStr(sampleRate * fc), ' ', N);
+  ConvR1D(samples, Length(samples), h, N, Result);
 
-  SetLength(ins, Length(samples));
   for i := 0 to High(samples) do
-    ins[i] := samples[i];
-
-  ConvR1D(ins, Length(samples), h, N, res);
+    Result[i] := Result[i + (N - 1) div 2];
 
   SetLength(Result, Length(samples));
-  for i := 0 to High(samples) do
-    Result[i] := make16BitSample(res[i + (N - 1) div 2]);
+end;
+
+function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; const samples: TDoubleDynArray
+  ): TDoubleDynArray;
+begin
+  Result := DoFilter(fcl, transFactor, True, chunkSz, samples);
+  Result := DoFilter(fch, transFactor, False, chunkSz, Result);
+end;
+
+constructor TEncoder.Create;
+begin
+
+end;
+
+destructor TEncoder.Destroy;
+var
+  i: Integer;
+begin
+  for i := 0 to BandCount - 1 do
+    bands[i].Free;
+
+  inherited Destroy;
+end;
+
+procedure TEncoder.MakeDstData;
+var
+  i, j: Integer;
+  acc: Double;
+  chunk: TChunk;
+  phase: Integer;
+begin
+  WriteLn('MakeDstData');
+
+  SetLength(dstData, Length(srcData));
+  FillWord(dstData[0], Length(srcData), 0);
+  for i := 0 to High(dstData) do
+  begin
+    acc := 0.0;
+    for j := 0 to BandCount - 1 do
+      acc += bands[j].dstData[i];
+    dstData[i] := make16BitSample(acc);
+  end;
+end;
+
+class function TEncoder.make16BitSample(smp: Double): SmallInt;
+begin
+  Result := EnsureRange(round(smp), Low(SmallInt), High(SmallInt));
+end;
+
+class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+var
+  k, n: Integer;
+  sum, s: Double;
+begin
+  SetLength(Result, length(samples));
+  for k := 0 to chunkSz - 1 do
+  begin
+    sum := 0;
+    s := ifthen(k = 0, sqrt(0.5), 1.0);
+    for n := 0 to chunkSz - 1 do
+      sum += s * samples[n] * cos(pi * (n + 0.5) * k / chunkSz);
+    Result[k] := sum * sqrt (2.0 / chunkSz);
+  end;
+end;
+
+class function TEncoder.ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
+var
+  k, n: Integer;
+  sum, s: Double;
+begin
+  SetLength(Result, length(dct));
+  for n := 0 to chunkSz - 1 do
+  begin
+    sum := 0;
+    for k := 0 to chunkSz - 1 do
+    begin
+      s := ifthen(k = 0, sqrt(0.5), 1.0);
+      sum += s * dct[k] * cos (pi * (n + 0.5) * k / chunkSz);
+    end;
+    Result[n] := sum * sqrt(2.0 / chunkSz);
+  end;
 end;
 
 class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
@@ -616,8 +714,9 @@ begin
     Result := InRange(y, a, c) or InRange(y, c, a);
 end;
 
-function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
+function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
 var
+  i: Integer;
   FNRef, FNTst: String;
   ms: TMemoryStream;
 begin
@@ -629,30 +728,34 @@ begin
   try
     ms.Write(srcHeader[0], $28);
     ms.WriteDWord(chunkSz * SizeOf(SmallInt));
-    ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
+
+    for i := 0 to chunkSz - 1 do
+      ms.WriteWord(make16BitSample(smpRef[i]) - Low(SmallInt));
 
     ms.SaveToFile(FNRef);
     ms.Clear;
 
     ms.Write(srcHeader[0], $28);
     ms.WriteDWord(chunkSz * SizeOf(SmallInt));
-    ms.Write(smpTst[0], chunkSz * SizeOf(SmallInt));
+
+    for i := 0 to chunkSz - 1 do
+      ms.WriteWord(make16BitSample(smpTst[i]) - Low(SmallInt));
 
     ms.SaveToFile(FNTst);
   finally
     ms.Free;
   end;
 
-  Result := DoExternalEAQUAL(FNRef, FNTst, UseDIX, chunkSz * 2);
+  Result := DoExternalEAQUAL(FNRef, FNTst, False, UseDIX, chunkSz * 2);
 
   DeleteFile(FNRef);
   DeleteFile(FNTst);
 end;
 
-function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray; smpTst: TSmallIntDynArray2
-  ): TDoubleDynArray;
+function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
+  smpTst: TDoubleDynArray2): TDoubleDynArray;
 var
-  i: Integer;
+  i, j: Integer;
   FNRef, FNTst: String;
   zeroes: TSmallIntDynArray;
   ms: TMemoryStream;
@@ -672,7 +775,8 @@ begin
     ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
     for i := 0 to High(smpTst) do
     begin
-      ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
+      for j := 0 to chunkSz - 1 do
+        ms.WriteWord(make16BitSample(smpRef[j]) - Low(SmallInt));
       ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
     end;
 
@@ -683,7 +787,8 @@ begin
     ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
     for i := 0 to High(smpTst) do
     begin
-      ms.Write(smpTst[i, 0], chunkSz * SizeOf(SmallInt));
+      for j := 0 to chunkSz - 1 do
+        ms.WriteWord(make16BitSample(smpTst[i, j]) - Low(SmallInt));
       ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
     end;
 
@@ -712,7 +817,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [chunk size] [iter count 1-inf]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [iter count 1-inf] [min chunk size 1-inf]');
       WriteLn;
       Exit;
     end;
@@ -720,27 +825,27 @@ begin
     enc := TEncoder.Create;
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-    enc.chunkSize := EnsureRange(StrToIntDef(ParamStr(4), 8), 16, 4096);
-    enc.restartCount := StrToIntDef(ParamStr(5), 4);
+    enc.restartCount := StrToIntDef(ParamStr(4), 10);
+    enc.minChunkSize := StrToIntDef(ParamStr(5), 64);
 
     try
 
       enc.load(ParamStr(1));
-
-      enc.makeChunks;
-
-      enc.kMeansReduce;
-
-      enc.makeDstData;
-
+      enc.MakeBands;
+      enc.MakeDstData;
       enc.save(ParamStr(2));
 
     finally
       enc.Free;
     end;
 
+{$if true}
     ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
-    Sleep(5000);
+{$else}
+    DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, False, 2048);
+{$endif}
+
+    ReadLn;
   except
     on e: Exception do
     begin
