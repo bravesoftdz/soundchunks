@@ -22,19 +22,19 @@ type
     srcModulo: Integer;
     srcData: TSmallIntDynArray;
     reducedChunk: TChunk;
-
-    fft: TComplex1DArray;
-    weightedFft: TComplex1DArray;
+    dct: TDoubleDynArray;
+    weightedDct: TDoubleDynArray;
 
     joinPhase: Integer;
     joinPenalty: Double;
-    fftAddCount: Integer;
+    dctAddCount: Integer;
 
     constructor Create(enc: TEncoder; idx: Integer);
 
-    procedure ComputeFFT;
-    procedure AddToFFT(ch: TChunk);
-    procedure FinalizeFFTAdd;
+    procedure ComputeDCT;
+    procedure ComputeInvDCT;
+    procedure AddToDCT(ch: TChunk);
+    procedure FinalizeDCTAdd;
 
     procedure FindBestModulo;
     procedure FindBestJoinPhase(prevChunk: TChunk);
@@ -63,11 +63,11 @@ type
     chunkWgtAtts: TDoubleDynArray;
 
     class function make16BitSample(smp: Double): SmallInt;
-    class function CompareFFT(firstCoeff, lastCoeff: Integer; compress: Boolean; const fftA, fftB: TDoubleDynArray): Double;
-    class function CompressFFT(coeff: Double): Double;
+    class function ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
+    class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
+    class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
+    class function CompressDCT(coeff: Double): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
-    class function ComputeFFT(chunkSz: Integer; const samples: TSmallIntDynArray): TComplex1DArray;
-    class function ComputeInvFFT(chunkSz: Integer; const fft: TComplex1DArray): TSmallIntDynArray;
 
     constructor Create;
     destructor Destroy; override;
@@ -83,7 +83,6 @@ type
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray;
       smpTst: TSmallIntDynArray2): TDoubleDynArray;
-
   end;
 
 function Div0(x, y: Double): Double; inline;
@@ -105,11 +104,11 @@ begin
   Move(encoder.highPassData[idx * encoder.chunkSize], srcData[0], encoder.chunkSize * SizeOf(SmallInt));
 
   reducedChunk := Self;
-  SetLength(fft, encoder.chunkSize);
-  SetLength(weightedFft, encoder.chunkSize);
+  SetLength(dct, encoder.chunkSize);
+  SetLength(weightedDct, encoder.chunkSize);
 end;
 
-procedure TChunk.ComputeFFT;
+procedure TChunk.ComputeDCT;
 var
   k: Integer;
   dta: TSmallIntDynArray;
@@ -117,46 +116,40 @@ begin
   SetLength(dta, encoder.chunkSize);
 
   for k := 0 to encoder.chunkSize - 1 do
-    dta[k] := srcData[k mod srcModulo];
+    dta[k] := TEncoder.make16BitSample(srcData[k mod srcModulo]);
 
-  fft := encoder.ComputeFFT(encoder.chunkSize, dta);
+  dct := TEncoder.ComputeDCT(encoder.chunkSize, dta);
 
   for k := 0 to encoder.chunkSize - 1 do
-  begin
-    weightedFft[k] := fft[k];
-    weightedFft[k].X *= encoder.chunkWgtAtts[k];
-  end;
+    weightedDct[k] := dct[k] * encoder.chunkWgtAtts[k];
 end;
 
-procedure TChunk.AddToFFT(ch: TChunk);
-var
-  k: Integer;
-  lfft: TComplex1DArray;
+procedure TChunk.ComputeInvDCT;
 begin
-  lfft := encoder.ComputeFFT(encoder.chunkSize, ch.srcData);
-  for k := 0 to encoder.chunkSize - 1 do
-  begin
-    fft[k].X += lfft[k].X;
-    fft[k].Y += lfft[k].Y;
-  end;
-  Inc(fftAddCount);
+  srcData := TEncoder.ComputeInvDCT(encoder.chunkSize, dct);
 end;
 
-procedure TChunk.FinalizeFFTAdd;
+procedure TChunk.AddToDCT(ch: TChunk);
 var
   k: Integer;
 begin
-  if fftAddCount = 0 then Exit;
+  for k := 0 to encoder.chunkSize - 1 do
+    dct[k] += ch.dct[k];
+  Inc(dctAddCount);
+end;
+
+procedure TChunk.FinalizeDCTAdd;
+var
+  k: Integer;
+begin
+  if dctAddCount = 0 then Exit;
 
   for k := 0 to encoder.chunkSize - 1 do
-  begin
-    fft[k].X /= fftAddCount;
-    fft[k].Y /= fftAddCount;
-  end;
+    dct[k] /= dctAddCount;
 
-  fftAddCount := 0;
+  dctAddCount := 0;
 
-  srcData := encoder.ComputeInvFFT(encoder.chunkSize, fft);
+  ComputeInvDCT;
 
   FindBestModulo;
 end;
@@ -168,8 +161,9 @@ var
   smps: TSmallIntDynArray2;
   mods: TIntegerDynArray;
   res: TDoubleDynArray;
-  checkJP: Boolean;
 begin
+  exit;
+
   // find the best looping point in a chunk
 
   if index and $0f = 0 then Write('.');
@@ -230,6 +224,8 @@ var
   phs: TIntegerDynArray;
   res: TDoubleDynArray;
 begin
+  exit;
+
   // find the best phase shift to join the chunks
 
   if index and $0f = 0 then Write('.');
@@ -349,9 +345,9 @@ end;
 
 procedure TEncoder.makeChunks;
 
-  procedure DoFFT(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  procedure DoDCT(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   begin
-    chunkList[AIndex].ComputeFFT;
+    chunkList[AIndex].ComputeDCT;
     chunkList[AIndex].FindBestModulo;
   end;
 var
@@ -371,9 +367,9 @@ begin
   SetLength(chunkFreqs, chunkSize);
   for i := 0 to chunkSize - 1 do
   begin
-    chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 2.0;
-    fsq := system.sqr(max(chunkFreqs[i], 20.0));
-    chunkWgtAtts[i] := system.sqr(12194.0) * fsq / ((fsq + system.sqr(20.6)) * (fsq + system.sqr(12194.0)));
+    chunkFreqs[i] := i * sampleRate / (chunkSize - 1) / 4.0;
+    fsq := sqr(max(chunkFreqs[i], 20.0));
+    chunkWgtAtts[i] := sqr(12194.0) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)));
   end;
 
   chunkList.Capacity := chunkCount;
@@ -383,7 +379,7 @@ begin
     chunkList.Add(chunk);
   end;
 
-  ProcThreadPool.DoParallelLocalProc(@DoFFT, 0, chunkList.Count - 1, nil);
+  ProcThreadPool.DoParallelLocalProc(@DoDCT, 0, chunkList.Count - 1, nil);
   WriteLn;
 end;
 
@@ -410,16 +406,16 @@ var
       for i := 0 to chunkList.Count - 1 do
         if XYC[i] = AIndex then
         begin
-          reducedChunk.AddToFFT(chunkList[i]);
+          reducedChunk.AddToDCT(chunkList[i]);
           chunkList[i].reducedChunk := reducedChunk;
         end;
 
-    reducedChunk.FinalizeFFTAdd;
+    reducedChunk.FinalizeDCTAdd;
   end;
 
 var
   FN, Line: String;
-  v1, v2: Double;
+  v1: Double;
   Dataset: TStringList;
   i, j : Integer;
 begin
@@ -435,9 +431,9 @@ begin
       Line := IntToStr(i) + ' ';
       for j := 0 to chunkSize - 1 do
       begin
-        v1 := CompressFFT(chunkList[i].fft[j].X);
-        v2 := CompressFFT(chunkList[i].fft[j].Y);
-        Line := Line + Format('%d:%.12g %d:%.12g ', [j * 2, v1, j * 2 + 1, v2]);
+        v1 := chunkList[i].dct[j];
+        v1 := CompressDCT(v1);
+        Line := Line + Format('%d:%.12g ', [j, v1]);
       end;
       Dataset.Add(Line);
     end;
@@ -504,29 +500,38 @@ begin
   Result := EnsureRange(round(smp), Low(SmallInt), High(SmallInt));
 end;
 
-class function TEncoder.ComputeFFT(chunkSz: Integer; const samples: TSmallIntDynArray): TComplex1DArray;
+class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TSmallIntDynArray): TDoubleDynArray;
 var
-  k: Integer;
-  rl: TReal1DArray;
+  k, n: Integer;
+  sum, s: Double;
 begin
-  SetLength(rl, chunkSz);
-
+  SetLength(Result, length(samples));
   for k := 0 to chunkSz - 1 do
-    rl[k] := samples[k];
-
-  FFTR1D(rl, chunkSz, Result);
+  begin
+    sum := 0;
+    s := ifthen(k = 0, sqrt(0.5), 1.0);
+    for n := 0 to chunkSz - 1 do
+      sum += s * samples[n] * cos(pi * (n + 0.5) * k / chunkSz);
+    Result[k] := sum * sqrt (2.0 / chunkSz);
+  end;
 end;
 
-class function TEncoder.ComputeInvFFT(chunkSz: Integer; const fft: TComplex1DArray): TSmallIntDynArray;
+class function TEncoder.ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TSmallIntDynArray;
 var
-  k: Integer;
-  ifft: TDoubleDynArray;
+  k, n: Integer;
+  sum, s: Double;
 begin
-  FFTR1DInv(fft, chunkSz, ifft);
-
-  SetLength(Result, chunkSz);
-  for k := 0 to chunkSz - 1 do
-    Result[k] := make16BitSample(ifft[k]);
+  SetLength(Result, length(dct));
+  for n := 0 to chunkSz - 1 do
+  begin
+    sum := 0;
+    for k := 0 to chunkSz - 1 do
+    begin
+      s := ifthen(k = 0, sqrt(0.5), 1.0);
+      sum += s * dct[k] * cos (pi * (n + 0.5) * k / chunkSz);
+    end;
+    Result[n] := TEncoder.make16BitSample(sum * sqrt(2.0 / chunkSz));
+  end;
 end;
 
 function TEncoder.DoHPFilter(chunkSz: Integer; const samples: TSmallIntDynArray): TSmallIntDynArray;
@@ -576,7 +581,7 @@ begin
     Result[i] := make16BitSample(res[i + (N - 1) div 2]);
 end;
 
-class function TEncoder.CompareFFT(firstCoeff, lastCoeff: Integer; compress: Boolean; const fftA, fftB: TDoubleDynArray): Double;
+class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
 var
   i: Integer;
 begin
@@ -584,19 +589,19 @@ begin
   if compress then
   begin
     for i := firstCoeff to lastCoeff do
-      Result += system.sqr(CompressFFT(fftA[i]) - CompressFFT(fftB[i]));
+      Result += sqr(CompressDCT(dctA[i]) - CompressDCT(dctB[i]));
   end
   else
   begin
     for i := firstCoeff to lastCoeff do
-      Result += system.sqr(fftA[i] - fftB[i]);
+      Result += sqr(dctA[i] - dctB[i]);
   end;
-  Result := system.sqrt(Result);
+  Result := sqrt(Result);
 end;
 
-class function TEncoder.CompressFFT(coeff: Double): Double;
+class function TEncoder.CompressDCT(coeff: Double): Double;
 begin
-  Result := Sign(coeff) * system.sqrt(system.Abs(coeff));
+  Result := Sign(coeff) * power(Abs(coeff), 0.707);
 end;
 
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
@@ -647,7 +652,7 @@ end;
 function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TSmallIntDynArray; smpTst: TSmallIntDynArray2
   ): TDoubleDynArray;
 var
-  i, j: Integer;
+  i: Integer;
   FNRef, FNTst: String;
   zeroes: TSmallIntDynArray;
   ms: TMemoryStream;
@@ -724,7 +729,7 @@ begin
 
       enc.makeChunks;
 
-      //enc.kMeansReduce;
+      enc.kMeansReduce;
 
       enc.makeDstData;
 

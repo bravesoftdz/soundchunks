@@ -9,13 +9,13 @@
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="341"/>
-        <CursorPos Y="372"/>
-        <UsageCount Value="120"/>
+        <TopLine Value="405"/>
+        <CursorPos X="65" Y="443"/>
+        <UsageCount Value="121"/>
         <Bookmarks Count="3">
-          <Item0 Y="493" ID="2"/>
-          <Item1 X="3" Y="612" ID="3"/>
-          <Item2 X="20" Y="206" ID="1"/>
+          <Item0 Y="500" ID="2"/>
+          <Item1 X="3" Y="619" ID="3"/>
+          <Item2 X="20" Y="213" ID="1"/>
         </Bookmarks>
         <Loaded Value="True"/>
       </Unit0>
@@ -25,7 +25,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="187"/>
         <CursorPos X="75" Y="220"/>
-        <UsageCount Value="118"/>
+        <UsageCount Value="119"/>
       </Unit1>
       <Unit2>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\inc\systemh.inc"/>
@@ -39,14 +39,14 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="838"/>
         <CursorPos X="30" Y="880"/>
-        <UsageCount Value="15"/>
+        <UsageCount Value="14"/>
       </Unit3>
       <Unit4>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\objpas\classes\streams.inc"/>
         <EditorIndex Value="-1"/>
         <TopLine Value="33"/>
         <CursorPos X="3" Y="35"/>
-        <UsageCount Value="15"/>
+        <UsageCount Value="14"/>
       </Unit4>
       <Unit5>
         <Filename Value="multithreadprocs\mtprocs.pas"/>
@@ -54,7 +54,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="691"/>
         <CursorPos X="42" Y="724"/>
-        <UsageCount Value="36"/>
+        <UsageCount Value="35"/>
       </Unit5>
       <Unit6>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\objpas\math.pp"/>
@@ -67,7 +67,7 @@
         <Filename Value="dsp\base.pas"/>
         <EditorIndex Value="-1"/>
         <TopLine Value="4"/>
-        <UsageCount Value="10"/>
+        <UsageCount Value="9"/>
       </Unit7>
       <Unit8>
         <Filename Value="alglib\fft.pas"/>
@@ -111,7 +111,7 @@
         <Filename Value="filters\UConst.pas"/>
         <EditorIndex Value="-1"/>
         <CursorPos X="3" Y="28"/>
-        <UsageCount Value="11"/>
+        <UsageCount Value="10"/>
       </Unit13>
       <Unit14>
         <Filename Value="filters\UOperator.pas"/>
@@ -134,7 +134,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="145"/>
         <CursorPos X="3" Y="205"/>
-        <UsageCount Value="10"/>
+        <UsageCount Value="9"/>
       </Unit16>
       <Unit17>
         <Filename Value="filters\UTBaseFreqAnalisys.pas"/>
@@ -148,7 +148,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="6"/>
         <CursorPos X="40" Y="49"/>
-        <UsageCount Value="10"/>
+        <UsageCount Value="9"/>
       </Unit18>
       <Unit19>
         <Filename Value="filters\ASWinBase.pas"/>
@@ -193,123 +193,123 @@
     <JumpHistory Count="30" HistoryIndex="29">
       <Position1>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="546" Column="20" TopLine="513"/>
+        <Caret Line="39" Column="72"/>
       </Position1>
       <Position2>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="115" Column="45" TopLine="101"/>
+        <Caret Line="137" Column="60" TopLine="88"/>
       </Position2>
       <Position3>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="131" Column="3" TopLine="113"/>
+        <Caret Line="350" Column="33" TopLine="319"/>
       </Position3>
       <Position4>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="176" Column="3" TopLine="167"/>
+        <Caret Line="348" TopLine="340"/>
       </Position4>
       <Position5>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="561" Column="22" TopLine="536"/>
+        <Caret Line="652" Column="4" TopLine="621"/>
       </Position5>
       <Position6>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="551" Column="29" TopLine="520"/>
+        <Caret Line="88" Column="10" TopLine="57"/>
       </Position6>
       <Position7>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="565" Column="6" TopLine="524"/>
+        <Caret Line="344" TopLine="314"/>
       </Position7>
       <Position8>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="589" Column="3" TopLine="531"/>
+        <Caret Line="347" TopLine="305"/>
       </Position8>
       <Position9>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="5" Column="81"/>
+        <Caret Line="56" Column="12" TopLine="28"/>
       </Position9>
       <Position10>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="139" Column="12" TopLine="104"/>
+        <Caret Line="178" Column="10" TopLine="147"/>
       </Position10>
       <Position11>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="578" TopLine="536"/>
+        <Caret Line="179" Column="10" TopLine="147"/>
       </Position11>
       <Position12>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="588" Column="40" TopLine="536"/>
+        <Caret Line="180" Column="10" TopLine="147"/>
       </Position12>
       <Position13>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="565" Column="14" TopLine="536"/>
+        <Caret Line="182" Column="10" TopLine="147"/>
       </Position13>
       <Position14>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="593" TopLine="536"/>
+        <Caret Line="183" Column="10" TopLine="147"/>
       </Position14>
       <Position15>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="579" Column="16" TopLine="550"/>
+        <Caret Line="190" Column="23" TopLine="147"/>
       </Position15>
       <Position16>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="603" TopLine="550"/>
+        <Caret Line="200" Column="63" TopLine="147"/>
       </Position16>
       <Position17>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="597" Column="30" TopLine="550"/>
+        <Caret Line="241" Column="8" TopLine="210"/>
       </Position17>
       <Position18>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="599" TopLine="550"/>
+        <Caret Line="264" Column="37" TopLine="210"/>
       </Position18>
       <Position19>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="600" TopLine="550"/>
+        <Caret Line="56" Column="9" TopLine="25"/>
       </Position19>
       <Position20>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="601" TopLine="550"/>
+        <Caret Line="362" Column="41" TopLine="331"/>
       </Position20>
       <Position21>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="597" TopLine="550"/>
+        <Caret Line="478" Column="29" TopLine="447"/>
       </Position21>
       <Position22>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="131" Column="3" TopLine="113"/>
+        <Caret Line="479" Column="31" TopLine="447"/>
       </Position22>
       <Position23>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="587" Column="32" TopLine="564"/>
+        <Caret Line="362" Column="41" TopLine="331"/>
       </Position23>
       <Position24>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="581" Column="18" TopLine="564"/>
+        <Caret Line="479" Column="31" TopLine="448"/>
       </Position24>
       <Position25>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="591" Column="16" TopLine="561"/>
+        <Caret Line="478" Column="29" TopLine="448"/>
       </Position25>
       <Position26>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="585" Column="99" TopLine="561"/>
+        <Caret Line="362" Column="41" TopLine="331"/>
       </Position26>
       <Position27>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="581" TopLine="112"/>
+        <Caret Line="306" Column="14" TopLine="275"/>
       </Position27>
       <Position28>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="499" Column="42" TopLine="469"/>
+        <Caret Line="308" Column="19" TopLine="275"/>
       </Position28>
       <Position29>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="369" Column="20" TopLine="351"/>
+        <Caret Line="306" Column="14" TopLine="275"/>
       </Position29>
       <Position30>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="64" TopLine="22"/>
+        <Caret Line="305" Column="15" TopLine="275"/>
       </Position30>
     </JumpHistory>
   </ProjectSession>
