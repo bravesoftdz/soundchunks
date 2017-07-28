@@ -5,13 +5,12 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, conv;
 
 const
-  PhaseSearch = 1;
   BandCount = 4;
+  BandTransFactor = 0.1;
   LowCut = 30.0;
   HighCut = 18000.0;
 
 type
-  TSmallIntDynArray2 = array of TSmallIntDynArray;
   TDoubleDynArray2 = array of TDoubleDynArray;
 
   TEncoder = class;
@@ -26,14 +25,10 @@ type
     reducedChunk: TChunk;
 
     index: Integer;
-    srcModulo: Integer;
+    dctAddCount: Integer;
 
     srcData: TDoubleDynArray;
     dct: TDoubleDynArray;
-
-    joinPhase: Integer;
-    joinPenalty: Double;
-    dctAddCount: Integer;
 
     constructor Create(enc: TEncoder; bnd: TBand; idx: Integer);
 
@@ -41,9 +36,6 @@ type
     procedure InitDCTAdd;
     procedure AddToDCT(ch: TChunk);
     procedure FinalizeDCTAdd;
-
-    procedure FindBestModulo;
-    procedure FindBestJoinPhase(prevChunk: TChunk);
   end;
 
   TChunkList = specialize TFPGObjectList<TChunk>;
@@ -54,6 +46,7 @@ type
   public
     encoder: TEncoder;
 
+    underSample: Integer;
     chunkSize: Integer;
     chunkCount: Integer;
     index: Integer;
@@ -118,16 +111,9 @@ type
       smpTst: TDoubleDynArray2): TDoubleDynArray;
   end;
 
-function Div0(x, y: Double): Double; inline;
-begin
-  Result := 0.0;
-  if not IsZero(y) then
-    Result := x / y;
-end;
 
 constructor TBand.Create(enc: TEncoder; idx: Integer);
 var
-  i: Integer;
   ratio: Double;
   fcdc: Double;
 begin
@@ -139,11 +125,17 @@ begin
   fcl := fcdc * power(2.0, index * ratio);
   fch := fcdc * power(2.0, (index + 1) * ratio);
 
-  chunkSize := 1;
-  while fcl < 1 / chunkSize do chunkSize *= 2;
-  chunkSize := max(encoder.minChunkSize, chunkSize);
+  chunkSize := round(intpower(2.0, ceil(-log2(fcl))));
+  underSample := round(intpower(2.0, floor(-log2(fch))));
+  chunkSize := chunkSize div underSample;
 
-  chunkCount := (encoder.srcDataCount - 1) div chunkSize + 1;
+  if chunkSize < encoder.minChunkSize then
+  begin
+    underSample := max(1, (underSample * chunkSize) div encoder.minChunkSize);
+    chunkSize := encoder.minChunkSize;
+  end;
+
+  chunkCount := (encoder.srcDataCount - 1) div (chunkSize * underSample) + 1;
 
   chunkList := TChunkList.Create;
   reducedChunks := TChunkList.Create;
@@ -183,10 +175,6 @@ procedure TBand.MakeChunks;
     chunk := chunkList[AIndex];
 
     chunk.ComputeDCT;
-    //chunk.dct[0] := 0;
-    //chunk.srcData := TEncoder.ComputeInvDCT(chunkSize, chunk.dct);
-
-    chunk.FindBestModulo;
   end;
 
 var
@@ -195,7 +183,7 @@ var
 begin
   WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,')');
 
-  srcData := encoder.DoBPFilter(fcl, fch, 0.001, chunkSize, encoder.srcData);
+  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, chunkSize, encoder.srcData);
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
@@ -244,7 +232,7 @@ var
   Dataset: TStringList;
   i, j : Integer;
 begin
-  //exit;
+  exit;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -282,18 +270,22 @@ end;
 
 procedure TBand.MakeDstData;
 var
-  i, j: Integer;
+  i, j, k: Integer;
   chunk: TChunk;
-  phase: Integer;
+  v, vv, smp, alpha, beta: Double;
 begin
   WriteLn('MakeDstData #', index);
 
-  for i := 1 to chunkList.Count - 1 do
-    chunkList[i].FindBestJoinPhase(chunkList[i - 1]);
-
-  phase := 0;
+  v := 0;
+  vv := 0;
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
+
+  alpha := 2.0 / underSample;
+  alpha := alpha / (alpha + 1);
+
+  beta := alpha;
+
   for i := 0 to chunkList.Count - 1 do
   begin
     chunk := chunkList[i];
@@ -301,39 +293,48 @@ begin
     //writeln(chunk.reducedChunk.srcModulo, #9, chunk.joinPhase, #9, phase);
 
     for j := 0 to chunkSize - 1 do
-      dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[(phase + chunk.joinPhase + j) mod chunk.reducedChunk.srcModulo];
+    begin
+      smp := chunk.reducedChunk.srcData[j];
 
-    //phase := (phase + chunk.joinPhase) mod chunk.reducedChunk.srcModulo;
+      for k := 0 to underSample - 1 do
+      begin
+        v := (1.0 - alpha) * v + alpha * smp;
+        vv := (1.0 - beta) * vv + beta * v;
+
+        dstData[(i * chunkSize + j) * underSample + k] := vv;
+      end;
+    end;
   end;
 end;
 
 { TChunk }
 
 constructor TChunk.Create(enc: TEncoder; bnd: TBand; idx: Integer);
+var
+  j, k: Integer;
+  acc: Double;
 begin
   index := idx;
   encoder := enc;
   band := bnd;
-  srcModulo := band.chunkSize;
 
   SetLength(srcData, band.chunkSize);
-  Move(band.srcData[idx * band.chunkSize], srcData[0], band.chunkSize * SizeOf(Double));
+
+  for j := 0 to band.chunkSize - 1 do
+  begin
+    acc := 0.0;
+    for k := 0 to band.underSample - 1 do
+      acc += band.srcData[(idx * band.chunkSize + j) * band.underSample + k];
+    srcData[j] := acc / band.underSample;
+  end;
 
   reducedChunk := Self;
   SetLength(dct, band.chunkSize);
 end;
 
 procedure TChunk.ComputeDCT;
-var
-  k: Integer;
-  dta: TDoubleDynArray;
 begin
-  SetLength(dta, band.chunkSize);
-
-  for k := 0 to band.chunkSize - 1 do
-    dta[k] := srcData[k mod srcModulo];
-
-  dct := TEncoder.ComputeDCT(band.chunkSize, dta);
+  dct := TEncoder.ComputeDCT(band.chunkSize, srcData);
 end;
 
 procedure TChunk.InitDCTAdd;
@@ -361,147 +362,6 @@ begin
     dct[k] /= dctAddCount;
 
   srcData := TEncoder.ComputeInvDCT(band.chunkSize, dct);
-
-  FindBestModulo;
-end;
-
-procedure TChunk.FindBestModulo;
-var
-  i, j, cnt: Integer;
-  a, b, c, x, y, z: Double;
-  cmp, best: Double;
-  smps: TDoubleDynArray2;
-  mods: TIntegerDynArray;
-  res: TDoubleDynArray;
-begin
-  exit;
-
-  // find the best looping point in a chunk
-
-  if index and $0f = 0 then Write('.');
-
-  SetLength(smps, band.chunkSize, band.chunkSize);
-  SetLength(mods, band.chunkSize);
-  cnt := 0;
-
-  for i := band.chunkSize - PhaseSearch * 2 - 1 downto band.chunkSize div 8 do
-  begin
-
-    x := srcData[0];
-    y := srcData[PhaseSearch];
-    z := srcData[PhaseSearch * 2];
-
-    a := srcData[i];
-    b := srcData[i + PhaseSearch];
-    c := srcData[i + PhaseSearch * 2];
-
-    if not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, True) then
-      Continue;
-
-    for j := 0 to band.chunkSize - 1 do
-      smps[cnt, j] := srcData[j mod i];
-
-    mods[cnt] := i;
-
-    Inc(cnt);
-  end;
-
-  SetLength(smps, cnt);
-  SetLength(mods, cnt);
-
-  res := encoder.ComputeEAQUALMulti(band.chunkSize, False, srcData, smps);
-
-  srcModulo := band.chunkSize;
-  best := MaxDouble;
-
-  for i := 0 to cnt - 1 do
-  begin
-    cmp := res[i];
-
-    if cmp < best then
-    begin
-      best := cmp;
-      srcModulo := mods[i];
-    end;
-  end;
-end;
-
-procedure TChunk.FindBestJoinPhase(prevChunk: TChunk);
-var
-  i, j, pmd, md, cnt: Integer;
-  a, b, c, x, y, z: Double;
-  cmp: Double;
-  checkJP: Boolean;
-  smpOri: TDoubleDynArray;
-  smpItr: TDoubleDynArray2;
-  phs: TIntegerDynArray;
-  res: TDoubleDynArray;
-begin
-  exit;
-
-  // find the best phase shift to join the chunks
-
-  if index and $0f = 0 then Write('.');
-
-  pmd := prevChunk.reducedChunk.srcModulo;
-  md := reducedChunk.srcModulo;
-
-  SetLength(smpOri, band.chunkSize * 2);
-  SetLength(smpItr, band.chunkSize, band.chunkSize * 2);
-  SetLength(phs, band.chunkSize);
-
-  move(prevChunk.srcData[0], smpOri[0], band.chunkSize * SizeOf(Double));
-  move(srcData[0], smpOri[band.chunkSize], band.chunkSize * SizeOf(Double));
-
-  for i := 0 to band.chunkSize - 1 do
-    for j := 0 to band.chunkSize - 1 do
-      smpItr[i, j] := prevChunk.reducedChunk.srcData[j mod pmd];
-
-  checkJP := True;
-  repeat
-    cnt := 0;
-
-    for i := 0 to md - 1 do
-    begin
-      x := prevChunk.reducedChunk.srcData[(band.chunkSize) mod pmd];
-      y := prevChunk.reducedChunk.srcData[(band.chunkSize + PhaseSearch) mod pmd];
-      z := prevChunk.reducedChunk.srcData[(band.chunkSize + PhaseSearch * 2) mod pmd];
-
-      a := reducedChunk.srcData[i];
-      b := reducedChunk.srcData[(i + PhaseSearch) mod md];
-      c := reducedChunk.srcData[(i + PhaseSearch * 2) mod md];
-
-      if (i <> 0) and not TEncoder.CheckJoinPenalty(x, y, z, a, b, c, checkJP) then
-        Continue;
-
-      for j := 0 to band.chunkSize - 1 do
-        smpItr[cnt, j + band.chunkSize] := reducedChunk.srcData[(j + i) mod md];
-
-      phs[cnt] := i;
-      Inc(cnt);
-    end;
-
-    checkJP := False;
-  until cnt <> 0;
-
-  SetLength(smpItr, cnt);
-  SetLength(phs, cnt);
-
-  res := encoder.ComputeEAQUALMulti(band.chunkSize * 2, False, smpOri, smpItr);
-
-  joinPhase := 0;
-  joinPenalty := Infinity;
-
-  for i := 0 to cnt - 1 do
-  begin
-    cmp := res[i];
-
-    if cmp < joinPenalty then
-    begin
-      joinPenalty := cmp;
-      joinPhase := phs[i];
-    end;
-  end;
 end;
 
 { TEncoder }
@@ -590,7 +450,7 @@ begin
       fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
       dbBatt := sqr(12194.0) * fsq * sqrt(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 
-      bnd.desiredChunkCount := round(sz * dbBatt);
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
     Inc(sz);
@@ -684,8 +544,6 @@ procedure TEncoder.MakeDstData;
 var
   i, j: Integer;
   acc: Double;
-  chunk: TChunk;
-  phase: Integer;
 begin
   WriteLn('MakeDstData');
 
@@ -886,7 +744,7 @@ begin
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.restartCount := StrToIntDef(ParamStr(4), 10);
-    enc.minChunkSize := StrToIntDef(ParamStr(5), 64);
+    enc.minChunkSize := StrToIntDef(ParamStr(5), 32);
 
     try
 
