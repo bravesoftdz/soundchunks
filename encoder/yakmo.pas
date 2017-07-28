@@ -24,7 +24,7 @@ function internalRuncommand(p:TProcess;var outputstring:string;
 var
     numbytes,bytesread,available : integer;
     outputlength, stderrlength : integer;
-    stderrnumbytes,stderrbytesread : integer;
+    stderrnumbytes,stderrbytesread, PrintErrLastPos, perp : integer;
 begin
   result:=-1;
   try
@@ -34,6 +34,7 @@ begin
     outputlength:=0;
     stderrbytesread:=0;
     stderrlength:=0;
+    PrintErrLastPos:=1;
     p.Execute;
     while p.Running do
       begin
@@ -66,8 +67,12 @@ begin
             StderrNumBytes := p.StdErr.Read(stderrstring[1+StderrBytesRead], available);
 
             // output stderr to screen
-            if PrintErr then
-              Write(Copy(stderrstring, 1+StderrBytesRead, available));
+            perp := Pos(#10, Copy(stderrstring, PrintErrLastPos, StderrBytesRead - PrintErrLastPos + stderrnumbytes));
+            if PrintErr and (perp <> 0) then
+            begin
+              Write(Copy(stderrstring, PrintErrLastPos, perp));
+              PrintErrLastPos += perp;
+            end;
 
             if StderrNumBytes > 0 then
               Inc(StderrBytesRead, StderrNumBytes);
@@ -75,6 +80,10 @@ begin
         else
           Sleep(40);
       end;
+
+    if PrintErr then
+      Write(Copy(stderrstring, PrintErrLastPos, StderrBytesRead - PrintErrLastPos));
+
     // Get left output after end of execution
     available:=P.Output.NumBytesAvailable;
     while available > 0 do
