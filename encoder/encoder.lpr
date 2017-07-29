@@ -330,7 +330,8 @@ end;
 
 constructor TChunk.Create(enc: TEncoder; bnd: TBand; idx: Integer);
 var
-  j: Integer;
+  j, k: Integer;
+  acc: Double;
 begin
   index := idx;
   encoder := enc;
@@ -339,7 +340,12 @@ begin
   SetLength(srcData, band.chunkSize);
 
   for j := 0 to band.chunkSize - 1 do
-    srcData[j] := band.srcData[(idx * band.chunkSize + j) * band.underSample];
+  begin
+    acc := 0.0;
+    for k := 0 to band.underSample - 1 do
+      acc += band.srcData[(idx * band.chunkSize + j) * band.underSample + k];
+    srcData[j] := acc / band.underSample;
+  end;
 
   reducedChunk := Self;
   SetLength(dct, band.chunkSize);
@@ -450,7 +456,7 @@ end;
 procedure TEncoder.FindBestDesiredChunksCounts;
 var
   bnd: TBand;
-  fsq, dbBatt: Double;
+  fsq, dbAatt: Double;
   i, sz, allSz: Integer;
 begin
   sz := 1;
@@ -460,10 +466,10 @@ begin
     begin
       bnd := bands[i];
 
-      fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
-      dbBatt := sqr(12194.0) * fsq * sqrt(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
+      fsq := sqr(bnd.fch * sampleRate);
+      dbAatt := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) + (fsq + sqr(737.9))));
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbAatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
     Inc(sz);
