@@ -7,22 +7,8 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 const
   BandCount = 4;
   BandTransFactor = 0.1;
-  LowCut = 30.0;
-  HighCut = 18000.0;
-
-  Butter2ndCoeffs: array[0..9, 0..2] of Double =
-  (
-    (0.0000000000, -0.1715728753, 3.414213562e+00),
-    (0.9428090416, -0.3333333333, 1.024264069e+01),
-    (1.4542435863, -0.5740619151, 3.338387406e+01),
-    (1.7237761728, -0.7575469445, 1.184456202e+02),
-    (1.8613611468, -0.8703674775, 4.441320406e+02),
-    (1.9306064272, -0.9329347318, 1.717988320e+03),
-    (1.9652933726, -0.9658854606, 6.755753138e+03),
-    (1.9826454185, -0.9827947193, 2.679155178e+04),
-    (1.9913225484, -0.9913600352, 1.067042553e+05),
-    (1.9956612539, -0.9956706459, 4.258941024e+05)
-  );
+  LowCut = 40.0;
+  HighCut = 16000.0;
 
 type
   TDoubleDynArray2 = array of TDoubleDynArray;
@@ -106,7 +92,6 @@ type
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
     class function CompressDCT(coeff: Double): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
-    class function DoButterWorthLP(fcDiv: Integer; x, xm1, xm2, ym1, ym2: Double): Double;
 
     constructor Create;
     destructor Destroy; override;
@@ -131,18 +116,25 @@ type
 constructor TBand.Create(enc: TEncoder; idx: Integer);
 var
   ratio: Double;
-  fcdc: Double;
 begin
   encoder := enc;
   index := idx;
 
-  fcdc := LowCut / encoder.sampleRate;
-  ratio := log2(HighCut / LowCut) / BandCount;
-  fcl := fcdc * power(2.0, index * ratio);
-  fch := fcdc * power(2.0, (index + 1) * ratio);
+  ratio := round(log2(LowCut / encoder.sampleRate * 2.0) / BandCount);
+
+  if index = 0 then
+    fcl := LowCut / encoder.sampleRate
+  else
+    fcl := 0.5 * power(2.0, (BandCount - index) * ratio);
+
+  if index = BandCount - 1 then
+    fch := HighCut / encoder.sampleRate
+  else
+    fch := 0.5 * power(2.0, (BandCount - 1 - index) * ratio);
 
   chunkSize := round(intpower(2.0, ceil(-log2(fcl))));
-  underSample := round(intpower(2.0, floor(-log2(fch))));
+  underSample := round(intpower(2.0, floor(-log2(fch)) - 2));
+  underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 
   if chunkSize < encoder.minChunkSize then
@@ -248,7 +240,7 @@ var
   Dataset: TStringList;
   i, j : Integer;
 begin
-  exit;
+  //exit;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -284,22 +276,25 @@ begin
   end;
 end;
 
-{$if true}
 procedure TBand.MakeDstData;
 var
   i, j, k: Integer;
   chunk: TChunk;
-  v, vv, smp, alpha: Double;
+  v, vv, v2, smp: Double;
+
+  pos: Integer;
+  smps, vs: TDoubleDynArray;
 begin
   WriteLn('MakeDstData #', index);
 
-  v := 0;
-  vv := 0;
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
-  alpha := 2.0 / underSample;
-  alpha := alpha / (alpha + 1);
+  SetLength(vs, underSample);
+  SetLength(smps, underSample);
+  v := 0;
+  v2 := 0;
+  pos := 0;
 
   for i := 0 to chunkList.Count - 1 do
   begin
@@ -307,61 +302,29 @@ begin
 
     for j := 0 to chunkSize - 1 do
     begin
-      smp := chunk.reducedChunk.srcData[j];
-
-      for k := 0 to underSample - 1 do
+      if underSample <= 1 then
+        dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[j]
+      else
       begin
-        v := (1.0 - alpha) * v + alpha * smp;
-        vv := (1.0 - alpha) * vv + alpha * v;
+        smp := chunk.reducedChunk.srcData[j] / underSample;
 
-        dstData[(i * chunkSize + j) * underSample + k] := vv;
+        for k := 0 to underSample - 1 do
+        begin
+          v := v + smp - smps[pos];
+          smps[pos] := smp;
+
+          vv := v / underSample;
+          v2 := v2 + vv - vs[pos];
+          vs[pos] := vv;
+
+          pos := (pos + 1) mod underSample;
+
+          dstData[(i * chunkSize + j) * underSample + k] := v2;
+        end;
       end;
     end;
   end;
 end;
-{$else}
-procedure TBand.MakeDstData;
-var
-  i, j, k: Integer;
-  chunk: TChunk;
-  smp, psmp, ppsmp, dst, pdst, ppdst: Double;
-begin
-  WriteLn('MakeDstData #', index);
-
-  SetLength(dstData, Length(srcData));
-  FillQWord(dstData[0], Length(srcData), 0);
-
-  psmp := 0;
-  ppsmp := 0;
-  pdst := 0;
-  ppdst := 0;
-  for i := 0 to chunkList.Count - 1 do
-  begin
-    chunk := chunkList[i];
-
-    for j := 0 to chunkSize - 1 do
-    begin
-      smp := chunk.reducedChunk.srcData[j];
-      if underSample = 1 then
-        dstData[i * chunkSize + j] := smp
-      else
-        for k := 0 to underSample - 1 do
-        begin
-          dst := TEncoder.DoButterWorthLP(underSample, smp, psmp, ppsmp, pdst, ppdst);
-
-          dstData[(i * chunkSize + j) * underSample + k] := dst;
-
-          ppdst := pdst;
-          pdst := dst;
-
-          ppsmp := psmp;
-          psmp := smp;
-        end;
-
-    end;
-  end;
-end;
-{$endif}
 
 { TChunk }
 
@@ -572,12 +535,6 @@ begin
       acc += bands[j].dstData[i];
     dstData[i] := make16BitSample(acc);
   end;
-end;
-
-class function TEncoder.DoButterWorthLP(fcDiv: Integer; x, xm1, xm2, ym1, ym2: Double): Double;
-begin
-  fcDiv := BsrDWord(fcDiv);
-  Result := (xm2 + 2.0 * xm1 + x) / Butter2ndCoeffs[fcDiv][2] + Butter2ndCoeffs[fcDiv][1] * ym2 + Butter2ndCoeffs[fcDiv][0] * ym1;
 end;
 
 function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
@@ -807,7 +764,7 @@ begin
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.restartCount := StrToIntDef(ParamStr(4), 10);
-    enc.minChunkSize := StrToIntDef(ParamStr(5), 32);
+    enc.minChunkSize := StrToIntDef(ParamStr(5), 4);
 
     try
 
