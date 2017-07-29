@@ -10,6 +10,20 @@ const
   LowCut = 30.0;
   HighCut = 18000.0;
 
+  Butter2ndCoeffs: array[0..9, 0..2] of Double =
+  (
+    (0.0000000000, -0.1715728753, 3.414213562e+00),
+    (0.9428090416, -0.3333333333, 1.024264069e+01),
+    (1.4542435863, -0.5740619151, 3.338387406e+01),
+    (1.7237761728, -0.7575469445, 1.184456202e+02),
+    (1.8613611468, -0.8703674775, 4.441320406e+02),
+    (1.9306064272, -0.9329347318, 1.717988320e+03),
+    (1.9652933726, -0.9658854606, 6.755753138e+03),
+    (1.9826454185, -0.9827947193, 2.679155178e+04),
+    (1.9913225484, -0.9913600352, 1.067042553e+05),
+    (1.9956612539, -0.9956706459, 4.258941024e+05)
+  );
+
 type
   TDoubleDynArray2 = array of TDoubleDynArray;
 
@@ -92,6 +106,7 @@ type
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
     class function CompressDCT(coeff: Double): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
+    class function DoButterWorthLP(fcDiv: Integer; x, xm1, xm2, ym1, ym2: Double): Double;
 
     constructor Create;
     destructor Destroy; override;
@@ -103,7 +118,8 @@ type
     procedure MakeBands;
     procedure MakeDstData;
 
-    function DoFilter(fc, transFactor: Double; HighPass: Boolean; chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
+    function DoFilter(fc, transFactor: Double; HighPass: Boolean; const samples: TDoubleDynArray): TDoubleDynArray;
     function DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
@@ -268,11 +284,12 @@ begin
   end;
 end;
 
+{$if true}
 procedure TBand.MakeDstData;
 var
   i, j, k: Integer;
   chunk: TChunk;
-  v, vv, smp, alpha, beta: Double;
+  v, vv, smp, alpha: Double;
 begin
   WriteLn('MakeDstData #', index);
 
@@ -284,13 +301,9 @@ begin
   alpha := 2.0 / underSample;
   alpha := alpha / (alpha + 1);
 
-  beta := alpha;
-
   for i := 0 to chunkList.Count - 1 do
   begin
     chunk := chunkList[i];
-
-    //writeln(chunk.reducedChunk.srcModulo, #9, chunk.joinPhase, #9, phase);
 
     for j := 0 to chunkSize - 1 do
     begin
@@ -299,20 +312,62 @@ begin
       for k := 0 to underSample - 1 do
       begin
         v := (1.0 - alpha) * v + alpha * smp;
-        vv := (1.0 - beta) * vv + beta * v;
+        vv := (1.0 - alpha) * vv + alpha * v;
 
         dstData[(i * chunkSize + j) * underSample + k] := vv;
       end;
     end;
   end;
 end;
+{$else}
+procedure TBand.MakeDstData;
+var
+  i, j, k: Integer;
+  chunk: TChunk;
+  smp, psmp, ppsmp, dst, pdst, ppdst: Double;
+begin
+  WriteLn('MakeDstData #', index);
+
+  SetLength(dstData, Length(srcData));
+  FillQWord(dstData[0], Length(srcData), 0);
+
+  psmp := 0;
+  ppsmp := 0;
+  pdst := 0;
+  ppdst := 0;
+  for i := 0 to chunkList.Count - 1 do
+  begin
+    chunk := chunkList[i];
+
+    for j := 0 to chunkSize - 1 do
+    begin
+      smp := chunk.reducedChunk.srcData[j];
+      if underSample = 1 then
+        dstData[i * chunkSize + j] := smp
+      else
+        for k := 0 to underSample - 1 do
+        begin
+          dst := TEncoder.DoButterWorthLP(underSample, smp, psmp, ppsmp, pdst, ppdst);
+
+          dstData[(i * chunkSize + j) * underSample + k] := dst;
+
+          ppdst := pdst;
+          pdst := dst;
+
+          ppsmp := psmp;
+          psmp := smp;
+        end;
+
+    end;
+  end;
+end;
+{$endif}
 
 { TChunk }
 
 constructor TChunk.Create(enc: TEncoder; bnd: TBand; idx: Integer);
 var
-  j, k: Integer;
-  acc: Double;
+  j: Integer;
 begin
   index := idx;
   encoder := enc;
@@ -321,12 +376,7 @@ begin
   SetLength(srcData, band.chunkSize);
 
   for j := 0 to band.chunkSize - 1 do
-  begin
-    acc := 0.0;
-    for k := 0 to band.underSample - 1 do
-      acc += band.srcData[(idx * band.chunkSize + j) * band.underSample + k];
-    srcData[j] := acc / band.underSample;
-  end;
+    srcData[j] := band.srcData[(idx * band.chunkSize + j) * band.underSample];
 
   reducedChunk := Self;
   SetLength(dct, band.chunkSize);
@@ -461,11 +511,10 @@ begin
   WriteLn('projectedDataCount = ', projectedDataCount);
 end;
 
-function TEncoder.DoFilter(fc, transFactor: Double; HighPass: Boolean; chunkSz: Integer; const samples: TDoubleDynArray
+function TEncoder.DoFilter(fc, transFactor: Double; HighPass: Boolean; const samples: TDoubleDynArray
   ): TDoubleDynArray;
 var
-  b, sinc, win, sum: Double;
-  i, N: Integer;
+  i: Integer;
   h: TReal1DArray;
 begin
   if (fc <= 0.0) and HighPass or (fc >=0.5) and not HighPass then
@@ -474,45 +523,12 @@ begin
     Exit;
   end;
 
-  b := fc * transFactor;
-  N := ceil(4 / b);
-  if (N mod 2) = 0 then N += 1;
+  h := DoFilterCoeffs(fc, transFactor, HighPass);
 
-  //writeln('DoFilter ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
-
-  SetLength(h, N);
-  sum := 0;
-  for i := 0 to N - 1 do
-  begin
-    sinc := 2.0 * fc * (i - (N - 1) / 2.0) * pi;
-    if IsZero(sinc) then
-      sinc := 1.0
-    else
-      sinc := sin(sinc) / sinc;
-
-    win := 0.42 - 0.5 * cos(2 * pi * i / (N - 1)) + 0.08 * cos(4 * pi * i / (N - 1));
-
-    h[i] := sinc * win;
-    sum += h[i];
-  end;
-
-  if HighPass then
-  begin
-    for i := 0 to N - 1 do
-      h[i] := -h[i] / sum;
-
-    h[(N - 1) div 2] += 1;
-  end
-  else
-  begin
-    for i := 0 to N - 1 do
-      h[i] := h[i] / sum;
-  end;
-
-  ConvR1D(samples, Length(samples), h, N, Result);
+  ConvR1D(samples, Length(samples), h, Length(h), Result);
 
   for i := 0 to High(samples) do
-    Result[i] := Result[i + (N - 1) div 2];
+    Result[i] := Result[i + (Length(h) - 1) div 2];
 
   SetLength(Result, Length(samples));
 end;
@@ -521,8 +537,8 @@ function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; co
   ): TDoubleDynArray;
 begin
   Assert(fch > fcl);
-  Result := DoFilter(fcl, transFactor, True, chunkSz, samples);
-  Result := DoFilter(fch, transFactor, False, chunkSz, Result);
+  Result := DoFilter(fcl, transFactor, True, samples);
+  Result := DoFilter(fch, transFactor, False, Result);
 end;
 
 constructor TEncoder.Create;
@@ -555,6 +571,53 @@ begin
     for j := 0 to BandCount - 1 do
       acc += bands[j].dstData[i];
     dstData[i] := make16BitSample(acc);
+  end;
+end;
+
+class function TEncoder.DoButterWorthLP(fcDiv: Integer; x, xm1, xm2, ym1, ym2: Double): Double;
+begin
+  fcDiv := BsrDWord(fcDiv);
+  Result := (xm2 + 2.0 * xm1 + x) / Butter2ndCoeffs[fcDiv][2] + Butter2ndCoeffs[fcDiv][1] * ym2 + Butter2ndCoeffs[fcDiv][0] * ym1;
+end;
+
+function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
+var
+  b, sinc, win, sum: Double;
+  i, N: Integer;
+begin
+  b := fc * transFactor;
+  N := ceil(4 / b);
+  if (N mod 2) = 0 then N += 1;
+
+  //writeln('DoFilter ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
+
+  SetLength(Result, N);
+  sum := 0;
+  for i := 0 to N - 1 do
+  begin
+    sinc := 2.0 * fc * (i - (N - 1) / 2.0) * pi;
+    if IsZero(sinc) then
+      sinc := 1.0
+    else
+      sinc := sin(sinc) / sinc;
+
+    win := 0.42 - 0.5 * cos(2 * pi * i / (N - 1)) + 0.08 * cos(4 * pi * i / (N - 1));
+
+    Result[i] := sinc * win;
+    sum += Result[i];
+  end;
+
+  if HighPass then
+  begin
+    for i := 0 to N - 1 do
+      Result[i] := -Result[i] / sum;
+
+    Result[(N - 1) div 2] += 1;
+  end
+  else
+  begin
+    for i := 0 to N - 1 do
+      Result[i] := Result[i] / sum;
   end;
 end;
 
