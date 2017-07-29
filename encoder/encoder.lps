@@ -9,11 +9,12 @@
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <CursorPos X="55" Y="35"/>
-        <UsageCount Value="195"/>
+        <TopLine Value="44"/>
+        <CursorPos X="62" Y="79"/>
+        <UsageCount Value="197"/>
         <Bookmarks Count="2">
-          <Item0 Y="365" ID="2"/>
-          <Item1 X="78" Y="423" ID="1"/>
+          <Item0 Y="369" ID="2"/>
+          <Item1 X="78" Y="427" ID="1"/>
         </Bookmarks>
         <Loaded Value="True"/>
       </Unit0>
@@ -22,7 +23,7 @@
         <IsPartOfProject Value="True"/>
         <EditorIndex Value="-1"/>
         <CursorPos X="10" Y="11"/>
-        <UsageCount Value="193"/>
+        <UsageCount Value="195"/>
       </Unit1>
       <Unit2>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\inc\systemh.inc"/>

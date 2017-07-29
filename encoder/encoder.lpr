@@ -6,7 +6,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 
 const
   BandCount = 4;
-  BandTransFactor = 0.5;
+  BandTransFactor = 0.1;
   LowCut = 40.0;
   HighCut = 16000.0;
 
@@ -160,6 +160,8 @@ begin
   encoder := enc;
   index := idx;
 
+  // determing low and high bandpass frequencies
+
   ratio := round(log2(LowCut / encoder.sampleRate * 2.0) / BandCount);
 
   if index = 0 then
@@ -171,6 +173,8 @@ begin
     fch := HighCut / encoder.sampleRate
   else
     fch := 0.5 * power(2.0, (BandCount - 1 - index) * ratio);
+
+  // undersample if the band high freq is a lot lower than nyquist
 
   chunkSize := round(intpower(2.0, ceil(-log2(fcl))));
   underSample := round(intpower(2.0, floor(-log2(fch))));
