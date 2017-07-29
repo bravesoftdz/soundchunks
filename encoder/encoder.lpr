@@ -311,7 +311,6 @@ begin
       for j := 0 to chunkSize - 1 do
       begin
         v1 := chunkList[i].dct[j];
-        v1 := TEncoder.CompressDCT(v1);
         Line := Line + Format('%d:%.12g ', [j, v1]);
       end;
       Dataset.Add(Line);
@@ -500,7 +499,7 @@ begin
     begin
       bnd := bands[i];
 
-      fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
+      fsq := sqr(bnd.fcl * sampleRate);// * bnd.fch * sampleRate;
       dbBatt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 
       bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * bnd.underSample * dbBatt));
@@ -805,7 +804,7 @@ begin
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.restartCount := StrToIntDef(ParamStr(4), 10);
-    enc.minChunkSize := StrToIntDef(ParamStr(5), 4);
+    enc.minChunkSize := StrToIntDef(ParamStr(5), 16);
 
     try
 
