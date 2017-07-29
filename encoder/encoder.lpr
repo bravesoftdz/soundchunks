@@ -400,7 +400,7 @@ end;
 procedure TChunk.InitDCTAdd;
 begin
   dctAddCount := 0;
-  FillQWord(dct[0], band.chunkSize, 0);
+  FillQWord(srcData[0], band.chunkSize, 0);
 end;
 
 procedure TChunk.AddToDCT(ch: TChunk);
@@ -408,7 +408,7 @@ var
   k: Integer;
 begin
   for k := 0 to band.chunkSize - 1 do
-    dct[k] += ch.dct[k];
+    srcData[k] += ch.srcData[k];
   Inc(dctAddCount);
 end;
 
@@ -419,9 +419,7 @@ begin
   if dctAddCount = 0 then Exit;
 
   for k := 0 to band.chunkSize - 1 do
-    dct[k] /= dctAddCount;
-
-  srcData := TEncoder.ComputeInvDCT(band.chunkSize, dct);
+    srcData[k] /= dctAddCount;
 end;
 
 { TEncoder }
@@ -505,10 +503,10 @@ begin
     begin
       bnd := bands[i];
 
-      fsq := sqr(bnd.fcl * sampleRate);// * bnd.fch * sampleRate;
+      fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
       dbBatt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * bnd.underSample * dbBatt));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
     Inc(sz);
