@@ -6,7 +6,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 
 const
   BandCount = 4;
-  BandTransFactor = 0.1;
+  BandTransFactor = 0.5;
   LowCut = 40.0;
   HighCut = 16000.0;
 
@@ -15,6 +15,19 @@ type
 
   TEncoder = class;
   TBand = class;
+
+  { TSecondOrderCIC }
+
+  TSecondOrderCIC = class
+  private
+    v, vv, v2: Double;
+    R, pos: Integer;
+    smps, vs: TDoubleDynArray;
+  public
+    constructor Create(AR: Integer);
+
+    function ProcessSample(Smp: Double): Double;
+  end;
 
   { TChunk }
 
@@ -73,6 +86,7 @@ type
 
   TEncoder = class
   public
+    inputFN, outputFN: String;
     quality: Double;
     restartCount: Integer;
     sampleRate: Integer;
@@ -93,11 +107,11 @@ type
     class function CompressDCT(coeff: Double): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
 
-    constructor Create;
+    constructor Create(InFN, OutFN: String);
     destructor Destroy; override;
 
-    procedure Load(fn: String);
-    procedure Save(fn: String);
+    procedure Load;
+    procedure Save;
 
     procedure FindBestDesiredChunksCounts;
     procedure MakeBands;
@@ -111,6 +125,32 @@ type
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
       smpTst: TDoubleDynArray2): TDoubleDynArray;
   end;
+
+constructor TSecondOrderCIC.Create(AR: Integer);
+begin
+  R := max(1, AR);
+  SetLength(vs, R);
+  SetLength(smps, R);
+  v := 0;
+  v2 := 0;
+  pos := 0;
+end;
+
+function TSecondOrderCIC.ProcessSample(Smp: Double): Double;
+begin
+  Smp /= R;
+
+  v := v + smp - smps[pos];
+  smps[pos] := smp;
+
+  vv := v / R;
+  v2 := v2 + vv - vs[pos];
+  vs[pos] := vv;
+
+  pos := (pos + 1) mod R;
+
+  Result := v2;
+end;
 
 
 constructor TBand.Create(enc: TEncoder; idx: Integer);
@@ -133,7 +173,7 @@ begin
     fch := 0.5 * power(2.0, (BandCount - 1 - index) * ratio);
 
   chunkSize := round(intpower(2.0, ceil(-log2(fcl))));
-  underSample := round(intpower(2.0, floor(-log2(fch)) - 2));
+  underSample := round(intpower(2.0, floor(-log2(fch))));
   underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 
@@ -188,10 +228,26 @@ procedure TBand.MakeChunks;
 var
   i: Integer;
   chunk: TChunk;
+  cic: TSecondOrderCIC;
 begin
-  WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,')');
+  WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
   srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, chunkSize, encoder.srcData);
+
+  if underSample > 1 then
+  begin
+    // compensate for decoder altering the pass band
+    cic := TSecondOrderCIC.Create(underSample);
+    try
+      for i := 0 to underSample - 1 do
+        cic.ProcessSample(srcData[i]);
+
+      for i := 0 to High(srcData) do
+        srcData[i] += srcData[i] - cic.ProcessSample(srcData[EnsureRange(i + underSample, 0, High(srcData))]);
+    finally
+      cic.Free;
+    end;
+  end;
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
@@ -255,7 +311,7 @@ begin
       for j := 0 to chunkSize - 1 do
       begin
         v1 := chunkList[i].dct[j];
-        //v1 := TEncoder.CompressDCT(v1);
+        v1 := TEncoder.CompressDCT(v1);
         Line := Line + Format('%d:%.12g ', [j, v1]);
       end;
       Dataset.Add(Line);
@@ -280,49 +336,29 @@ procedure TBand.MakeDstData;
 var
   i, j, k: Integer;
   chunk: TChunk;
-  v, vv, v2, smp: Double;
-
-  pos: Integer;
-  smps, vs: TDoubleDynArray;
+  smp: Double;
+  cic: TSecondOrderCIC;
 begin
   WriteLn('MakeDstData #', index);
 
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
-  SetLength(vs, underSample);
-  SetLength(smps, underSample);
-  v := 0;
-  v2 := 0;
-  pos := 0;
-
-  for i := 0 to chunkList.Count - 1 do
-  begin
-    chunk := chunkList[i];
-
-    for j := 0 to chunkSize - 1 do
+  cic := TSecondOrderCIC.Create(underSample);
+  try
+    for i := 0 to chunkList.Count - 1 do
     begin
-      if underSample <= 1 then
-        dstData[i * chunkSize + j] := chunk.reducedChunk.srcData[j]
-      else
+      chunk := chunkList[i];
+
+      for j := 0 to chunkSize - 1 do
       begin
-        smp := chunk.reducedChunk.srcData[j] / underSample;
-
+        smp := chunk.reducedChunk.srcData[j];
         for k := 0 to underSample - 1 do
-        begin
-          v := v + smp - smps[pos];
-          smps[pos] := smp;
-
-          vv := v / underSample;
-          v2 := v2 + vv - vs[pos];
-          vs[pos] := vv;
-
-          pos := (pos + 1) mod underSample;
-
-          dstData[(i * chunkSize + j) * underSample + k] := v2;
-        end;
+          dstData[(i * chunkSize + j) * underSample + k] := cic.ProcessSample(Smp);
       end;
     end;
+  finally
+    cic.Free;
   end;
 end;
 
@@ -385,13 +421,13 @@ end;
 
 { TEncoder }
 
-procedure TEncoder.Load(fn: String);
+procedure TEncoder.Load;
 var
   fs: TFileStream;
   i: Integer;
 begin
-  WriteLn('load ', fn);
-  fs := TFileStream.Create(fn, fmOpenRead or fmShareDenyNone);
+  WriteLn('load ', inputFN);
+  fs := TFileStream.Create(inputFN, fmOpenRead or fmShareDenyNone);
   try
     fs.ReadBuffer(srcHeader[0], SizeOf(srcHeader));
     srcDataCount := (fs.Size - fs.Position) div 2;
@@ -417,6 +453,7 @@ procedure TEncoder.MakeBands;
 
     bnd.KMeansReduce;
     bnd.MakeDstData;
+    bnd.Save(ChangeFileExt(outputFN, '-' + IntToStr(AIndex) + '.wav'));
   end;
 
 var
@@ -434,17 +471,14 @@ begin
 end;
 
 
-procedure TEncoder.Save(fn: String);
+procedure TEncoder.Save;
 var
   i: Integer;
   fs: TFileStream;
 begin
-  WriteLn('save ', fn);
+  WriteLn('save ', outputFN);
 
-  for i := 0 to BandCount - 1 do
-    bands[i].Save(ChangeFileExt(fn, '-' + IntToStr(i) + '.wav'));
-
-  fs := TFileStream.Create(fn, fmCreate or fmShareDenyWrite);
+  fs := TFileStream.Create(outputFN, fmCreate or fmShareDenyWrite);
   try
     fs.WriteBuffer(srcHeader[0], SizeOf(srcHeader));
     fs.WriteBuffer(dstData[0], srcDataCount * 2);
@@ -456,7 +490,7 @@ end;
 procedure TEncoder.FindBestDesiredChunksCounts;
 var
   bnd: TBand;
-  fsq, dbAatt: Double;
+  fsq, dbBatt: Double;
   i, sz, allSz: Integer;
 begin
   sz := 1;
@@ -466,10 +500,10 @@ begin
     begin
       bnd := bands[i];
 
-      fsq := sqr(bnd.fch * sampleRate);
-      dbAatt := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) + (fsq + sqr(737.9))));
+      fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
+      dbBatt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbAatt));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * bnd.underSample * dbBatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
     Inc(sz);
@@ -510,9 +544,10 @@ begin
   Result := DoFilter(fch, transFactor, False, Result);
 end;
 
-constructor TEncoder.Create;
+constructor TEncoder.Create(InFN, OutFN: String);
 begin
-
+  inputFN := InFN;
+  outputFN := OutFN;
 end;
 
 destructor TEncoder.Destroy;
@@ -766,7 +801,7 @@ begin
       Exit;
     end;
 
-    enc := TEncoder.Create;
+    enc := TEncoder.Create(ParamStr(1), ParamStr(2));
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.restartCount := StrToIntDef(ParamStr(4), 10);
@@ -774,10 +809,10 @@ begin
 
     try
 
-      enc.Load(ParamStr(1));
+      enc.Load;
       enc.MakeBands;
       enc.MakeDstData;
-      enc.Save(ParamStr(2));
+      enc.Save;
 
     finally
       enc.Free;

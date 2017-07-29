@@ -69,7 +69,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\loading_shorter.wav ..\out.wav 0.1 5"/>
+        <CommandLineParams Value="..\loading_short.wav ..\out.wav 0.1 25 32"/>
       </local>
     </RunParams>
     <Units Count="2">
@@ -87,7 +87,7 @@
     <Version Value="11"/>
     <PathDelim Value="\"/>
     <Target>
-      <Filename Value="encoder"/>
+      <Filename Value="encoder_debug"/>
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>
