@@ -59,8 +59,8 @@ type
   public
     encoder: TEncoder;
 
-    underSample: Integer;
-    chunkSize: Integer;
+    underSample, underSampleUnMin: Integer;
+    chunkSize, chunkSizeUnMin: Integer;
     chunkCount: Integer;
     index: Integer;
     fcl, fch: Double;
@@ -119,7 +119,7 @@ type
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
     function DoFilter(fc, transFactor: Double; HighPass: Boolean; const samples: TDoubleDynArray): TDoubleDynArray;
-    function DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
@@ -177,6 +177,8 @@ begin
   underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 
+  underSampleUnMin := underSample;
+  chunkSizeUnMin := chunkSize;
   if chunkSize < encoder.minChunkSize then
   begin
     underSample := max(1, (underSample * chunkSize) div encoder.minChunkSize);
@@ -232,7 +234,7 @@ var
 begin
   WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
-  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, chunkSize, encoder.srcData);
+  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, encoder.srcData);
 
   if underSample > 1 then
   begin
@@ -535,8 +537,7 @@ begin
   SetLength(Result, Length(samples));
 end;
 
-function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; chunkSz: Integer; const samples: TDoubleDynArray
-  ): TDoubleDynArray;
+function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 begin
   Assert(fch > fcl);
   Result := DoFilter(fcl, transFactor, True, samples);
