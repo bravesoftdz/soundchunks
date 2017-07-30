@@ -27,7 +27,9 @@ type
   public
     constructor Create(AR: Integer);
 
-    function ProcessSample(Smp: Double): Double;
+    function ProcessSample(Smp: Double; SecondOrderOutput: Boolean): Double;
+
+    property Ratio: Integer read R;
   end;
 
   { TChunk }
@@ -148,7 +150,7 @@ begin
   pos := 0;
 end;
 
-function TSecondOrderCIC.ProcessSample(Smp: Double): Double;
+function TSecondOrderCIC.ProcessSample(Smp: Double; SecondOrderOutput: Boolean): Double;
 begin
   Smp /= R;
 
@@ -161,7 +163,7 @@ begin
 
   pos := (pos + 1) mod R;
 
-  Result := v2;
+  Result := ifthen(SecondOrderOutput, v2, v);
 end;
 
 
@@ -250,22 +252,18 @@ var
 begin
   WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
-  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, encoder.srcData);
+  srcData := Copy(encoder.srcData);
 
-  if underSample > 1 then
-  begin
-    // compensate for decoder altering the pass band
-    cic := TSecondOrderCIC.Create(underSample);
-    try
-      for i := 0 to underSample - 1 do
-        cic.ProcessSample(srcData[i]);
-
-      for i := 0 to High(srcData) do
-        srcData[i] += srcData[i] - cic.ProcessSample(srcData[EnsureRange(i + underSample, 0, High(srcData))]);
-    finally
-      cic.Free;
-    end;
+  // compensate for decoder altering the pass band
+  cic := TSecondOrderCIC.Create(underSample);
+  try
+    for i := 0 to High(srcData) do
+      srcData[i] += srcData[i] - cic.ProcessSample(srcData[i], False);
+  finally
+    cic.Free;
   end;
+
+  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, srcData);
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
@@ -314,7 +312,7 @@ var
   Dataset: TStringList;
   i, j : Integer;
 begin
-  //exit;
+  exit;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -375,7 +373,7 @@ begin
       begin
         smp := chunk.reducedChunk.srcData[j];
         for k := 0 to underSample - 1 do
-          dstData[(i * chunkSize + j) * underSample + k] := cic.ProcessSample(Smp);
+          dstData[(i * chunkSize + j) * underSample + k] := cic.ProcessSample(Smp, False);
       end;
     end;
   finally
@@ -539,7 +537,7 @@ begin
       fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
       dbBatt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz / bnd.chunkSizeUnMin * dbBatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
     Inc(sz);
@@ -859,7 +857,7 @@ begin
     DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, False, 2048);
 {$endif}
 
-    ReadLn;
+    //ReadLn;
   except
     on e: Exception do
     begin
