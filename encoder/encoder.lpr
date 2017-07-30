@@ -2,11 +2,11 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, conv;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv;
 
 const
   BandCount = 4;
-  BandTransFactor = 0.1;
+  BandTransFactor = 0.5;
   LowCut = 40.0;
   HighCut = 16000.0;
 
@@ -42,10 +42,12 @@ type
 
     srcData: TDoubleDynArray;
     dct: TDoubleDynArray;
+    fft: TComplex1DArray;
 
     constructor Create(enc: TEncoder; bnd: TBand; idx: Integer);
 
     procedure ComputeDCT;
+    procedure ComputeFFT;
     procedure InitDCTAdd;
     procedure AddToDCT(ch: TChunk);
     procedure FinalizeDCTAdd;
@@ -229,6 +231,7 @@ procedure TBand.MakeChunks;
     chunk := chunkList[AIndex];
 
     chunk.ComputeDCT;
+    chunk.ComputeFFT;
   end;
 
 var
@@ -298,7 +301,7 @@ var
 
 var
   FN, Line: String;
-  v1: Double;
+  v1, v2, joinFactor: Double;
   Dataset: TStringList;
   i, j : Integer;
 begin
@@ -310,14 +313,18 @@ begin
   Dataset := TStringList.Create;
   Dataset.LineBreak := #10;
 
+  joinFactor := chunkSize / chunkSizeUnMin;
+
   try
     for i := 0 to chunkList.Count - 1 do
     begin
       Line := IntToStr(i) + ' ';
-      for j := 0 to chunkSize - 1 do
+      Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * joinFactor, chunkList[i].srcData[chunkSize - 1] * joinFactor]);
+      for j := 0 to chunkSizeUnMin div 2 - 1 do
       begin
-        v1 := chunkList[i].dct[j];
-        Line := Line + Format('%d:%.12g ', [j, v1]);
+        v1 := chunkList[i].fft[j].X;
+        v2 := chunkList[i].fft[j].Y;
+        Line := Line + Format('%d:%.12g %d:%.12g ', [j * 2 + 2, v1, j * 2 + 3, v2]);
       end;
       Dataset.Add(Line);
     end;
@@ -397,6 +404,11 @@ begin
   dct := TEncoder.ComputeDCT(band.chunkSize, srcData);
 end;
 
+procedure TChunk.ComputeFFT;
+begin
+  FFTR1D(srcData, band.chunkSize, fft);
+end;
+
 procedure TChunk.InitDCTAdd;
 begin
   dctAddCount := 0;
@@ -437,7 +449,7 @@ begin
     SetLength(srcData, srcDataCount + 65536);
     FillQWord(srcData[0], srcDataCount + 65536, 0);
     for i := 0 to srcDataCount - 1 do
-      srcData[i] := SmallInt(fs.ReadWord);
+      srcData[i] := SmallInt(fs.ReadWord) / High(SmallInt);
   finally
     fs.Free;
   end;
@@ -534,7 +546,7 @@ begin
   ConvR1D(samples, Length(samples), h, Length(h), Result);
 
   for i := 0 to High(samples) do
-    Result[i] := Result[i + (Length(h) - 1) div 2];
+    Result[i] := Result[i + Length(h) div 2];
 
   SetLength(Result, Length(samples));
 end;
@@ -585,7 +597,7 @@ var
   b, sinc, win, sum: Double;
   i, N: Integer;
 begin
-  b := fc * transFactor;
+  b := (exp(fc) - 1.0) * transFactor;
   N := ceil(4 / b);
   if (N mod 2) = 0 then N += 1;
 
@@ -623,7 +635,7 @@ end;
 
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
-  Result := EnsureRange(round(smp), Low(SmallInt), High(SmallInt));
+  Result := EnsureRange(round(smp * High(SmallInt)), Low(SmallInt), High(SmallInt));
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
