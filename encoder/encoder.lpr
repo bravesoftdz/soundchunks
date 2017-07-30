@@ -9,7 +9,7 @@ const
   BandTransFactor = 0.5;
   LowCut = 40.0;
   HighCut = 16000.0;
-  BandDealiasSecondOrder = False;
+  BandDealiasSecondOrder = True;
 
 type
   TDoubleDynArrayList = specialize TFPGList<TDoubleDynArray>;
@@ -27,10 +27,12 @@ type
     smps, vs: TDoubleDynArray;
   public
     Ratio: Integer;
+    CorrectionFactor: Double;
+    SecondOrder: Boolean;
 
-    constructor Create(ARatio: Integer);
+    constructor Create(ARatio: Integer; ASecondOrder: Boolean);
 
-    function ProcessSample(Smp: Double; SecondOrderOutput: Boolean): Double;
+    function ProcessSample(Smp: Double): Double;
   end;
 
   { TChunk }
@@ -142,8 +144,10 @@ begin
 end;
 
 
-constructor TSecondOrderCIC.Create(ARatio: Integer);
+constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
+  SecondOrder := ASecondOrder;
+  CorrectionFactor := ifthen(SecondOrder, 4.0, 1.0);
   Ratio := ARatio;
   R := max(1, ARatio);
   SetLength(vs, R);
@@ -153,7 +157,7 @@ begin
   pos := 0;
 end;
 
-function TSecondOrderCIC.ProcessSample(Smp: Double; SecondOrderOutput: Boolean): Double;
+function TSecondOrderCIC.ProcessSample(Smp: Double): Double;
 begin
   Smp /= R;
 
@@ -166,7 +170,7 @@ begin
 
   pos := (pos + 1) mod R;
 
-  Result := ifthen(SecondOrderOutput, v2, v);
+  Result := ifthen(SecondOrder, v2, v);
 end;
 
 
@@ -258,10 +262,11 @@ begin
   srcData := Copy(encoder.srcData);
 
   // compensate for decoder altering the pass band
-  cic := TSecondOrderCIC.Create(underSample);
+  cic := TSecondOrderCIC.Create(underSample, BandDealiasSecondOrder);
   try
-    for i := 0 to High(srcData) do
-      srcData[i] += srcData[i] - cic.ProcessSample(srcData[i], BandDealiasSecondOrder);
+    for i := -cic.Ratio + 1 to High(srcData) do
+      srcData[Max(0, i)] := encoder.srcData[Max(0, i)] * (cic.CorrectionFactor + 1) -
+        cic.CorrectionFactor * cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
   finally
     cic.Free;
   end;
@@ -366,8 +371,8 @@ begin
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
-  pos := 0;
-  cic := TSecondOrderCIC.Create(underSample);
+  cic := TSecondOrderCIC.Create(underSample, BandDealiasSecondOrder);
+  pos := -cic.Ratio + 1;
   try
     for i := 0 to chunkList.Count - 1 do
     begin
@@ -378,10 +383,16 @@ begin
         smp := chunk.reducedChunk.srcData[j];
         for k := 0 to underSample - 1 do
         begin
-          dstData[pos] := cic.ProcessSample(Smp, BandDealiasSecondOrder);
+          dstData[max(0, pos)] := cic.ProcessSample(Smp);
           pos := min(High(dstData), pos + 1);
         end;
       end;
+    end;
+
+    for k := 0 to underSample - 1 do
+    begin
+      dstData[pos] := cic.ProcessSample(0);
+      pos := min(High(dstData), pos + 1);
     end;
   finally
     cic.Free;
@@ -404,14 +415,10 @@ begin
   for j := 0 to band.chunkSize - 1 do
   begin
     pos := (idx * band.chunkSize + j) * band.underSample;
-{$if true}
     acc := 0.0;
     for k := 0 to band.underSample - 1 do
       acc += band.srcData[min(High(band.srcData), pos + k)];
     srcData[j] := acc / band.underSample;
-{$else}
-    srcData[j] := band.srcData[min(High(band.srcData), pos)];
-{$endif}
   end;
 
   reducedChunk := Self;
@@ -880,9 +887,9 @@ begin
     ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
 {$else}
     DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, False, 2048);
+    ReadLn;
 {$endif}
 
-    //ReadLn;
   except
     on e: Exception do
     begin
