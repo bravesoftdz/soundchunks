@@ -9,6 +9,7 @@ const
   BandTransFactor = 0.5;
   LowCut = 40.0;
   HighCut = 16000.0;
+  BandDealiasSecondOrder = False;
 
 type
   TDoubleDynArrayList = specialize TFPGList<TDoubleDynArray>;
@@ -25,11 +26,11 @@ type
     R, pos: Integer;
     smps, vs: TDoubleDynArray;
   public
-    constructor Create(AR: Integer);
+    Ratio: Integer;
+
+    constructor Create(ARatio: Integer);
 
     function ProcessSample(Smp: Double; SecondOrderOutput: Boolean): Double;
-
-    property Ratio: Integer read R;
   end;
 
   { TChunk }
@@ -105,6 +106,7 @@ type
     bands: array[0..BandCount - 1] of TBand;
 
     class function make16BitSample(smp: Double): SmallInt;
+    class function makeFloatSample(smp: SmallInt): Double;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
@@ -122,7 +124,7 @@ type
     procedure MakeDstData;
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
-    function DoFilter(fc, transFactor: Double; HighPass: Boolean; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
     function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
@@ -140,9 +142,10 @@ begin
 end;
 
 
-constructor TSecondOrderCIC.Create(AR: Integer);
+constructor TSecondOrderCIC.Create(ARatio: Integer);
 begin
-  R := max(1, AR);
+  Ratio := ARatio;
+  R := max(1, ARatio);
   SetLength(vs, R);
   SetLength(smps, R);
   v := 0;
@@ -258,7 +261,7 @@ begin
   cic := TSecondOrderCIC.Create(underSample);
   try
     for i := 0 to High(srcData) do
-      srcData[i] += srcData[i] - cic.ProcessSample(srcData[i], False);
+      srcData[i] += srcData[i] - cic.ProcessSample(srcData[i], BandDealiasSecondOrder);
   finally
     cic.Free;
   end;
@@ -312,7 +315,7 @@ var
   Dataset: TStringList;
   i, j : Integer;
 begin
-  exit;
+  if encoder.restartCount <= 0 then Exit;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -353,7 +356,7 @@ end;
 
 procedure TBand.MakeDstData;
 var
-  i, j, k: Integer;
+  i, j, k, pos: Integer;
   chunk: TChunk;
   smp: Double;
   cic: TSecondOrderCIC;
@@ -363,6 +366,7 @@ begin
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
+  pos := 0;
   cic := TSecondOrderCIC.Create(underSample);
   try
     for i := 0 to chunkList.Count - 1 do
@@ -373,7 +377,10 @@ begin
       begin
         smp := chunk.reducedChunk.srcData[j];
         for k := 0 to underSample - 1 do
-          dstData[(i * chunkSize + j) * underSample + k] := cic.ProcessSample(Smp, False);
+        begin
+          dstData[pos] := cic.ProcessSample(Smp, BandDealiasSecondOrder);
+          pos := min(High(dstData), pos + 1);
+        end;
       end;
     end;
   finally
@@ -385,7 +392,7 @@ end;
 
 constructor TChunk.Create(enc: TEncoder; bnd: TBand; idx: Integer);
 var
-  j, k: Integer;
+  j, k, pos: Integer;
   acc: Double;
 begin
   index := idx;
@@ -396,10 +403,15 @@ begin
 
   for j := 0 to band.chunkSize - 1 do
   begin
+    pos := (idx * band.chunkSize + j) * band.underSample;
+{$if true}
     acc := 0.0;
     for k := 0 to band.underSample - 1 do
-      acc += band.srcData[(idx * band.chunkSize + j) * band.underSample + k];
+      acc += band.srcData[min(High(band.srcData), pos + k)];
     srcData[j] := acc / band.underSample;
+{$else}
+    srcData[j] := band.srcData[min(High(band.srcData), pos)];
+{$endif}
   end;
 
   reducedChunk := Self;
@@ -466,16 +478,17 @@ begin
   try
     fs.ReadBuffer(srcHeader[0], SizeOf(srcHeader));
     srcDataCount := (fs.Size - fs.Position) div 2;
-    SetLength(srcData, srcDataCount + 65536);
-    FillQWord(srcData[0], srcDataCount + 65536, 0);
+    SetLength(srcData, srcDataCount);
+    FillQWord(srcData[0], srcDataCount, 0);
     for i := 0 to srcDataCount - 1 do
-      srcData[i] := SmallInt(fs.ReadWord) / -Low(SmallInt);
+      srcData[i] := makeFloatSample(SmallInt(fs.ReadWord));
   finally
     fs.Free;
   end;
 
   sampleRate := PInteger(@srcHeader[$18])^;
-  writeln(sampleRate, ' Hz');
+  writeln('sampleRate = ', sampleRate);
+  WriteLn('srcDataCount = ', srcDataCount);
 end;
 
 procedure TEncoder.MakeBands;
@@ -524,57 +537,64 @@ end;
 procedure TEncoder.FindBestDesiredChunksCounts;
 var
   bnd: TBand;
-  fsq, dbBatt: Double;
-  i, sz, allSz: Integer;
+  fsq: Double;
+  dbBatt: array[0 .. BandCount - 1] of Double;
+  i, allSz: Integer;
+  sz: Double;
+  full: Boolean;
 begin
+  for i := 0 to BandCount - 1 do
+  begin
+    bnd := bands[i];
+
+    fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
+    dbBatt[i] := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
+
+    dbBatt[i] /= bnd.chunkSizeUnMin;
+  end;
+
   sz := 1;
   repeat
+    full := True;
     allSz := 0;
     for i := 0 to BandCount - 1 do
     begin
       bnd := bands[i];
 
-      fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
-      dbBatt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt[i]));
+      full := full and (bnd.desiredChunkCount = bnd.chunkCount);
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz / bnd.chunkSizeUnMin * dbBatt));
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
     end;
-    Inc(sz);
-  until allSz >= srcDataCount * quality;
+    sz += 1.0;
+  until (allSz >= srcDataCount * quality) or full;
 
   projectedDataCount := allSz;
 
   WriteLn('projectedDataCount = ', projectedDataCount);
 end;
 
-function TEncoder.DoFilter(fc, transFactor: Double; HighPass: Boolean; const samples: TDoubleDynArray
-  ): TDoubleDynArray;
+function TEncoder.DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
 var
   i: Integer;
-  h: TReal1DArray;
 begin
-  if (fc <= 0.0) and HighPass or (fc >=0.5) and not HighPass then
-  begin
-    Result := samples;
-    Exit;
-  end;
-
-  h := DoFilterCoeffs(fc, transFactor, HighPass);
-
-  ConvR1D(samples, Length(samples), h, Length(h), Result);
+  ConvR1D(samples, Length(samples), coeffs, Length(coeffs), Result);
 
   for i := 0 to High(samples) do
-    Result[i] := Result[i + Length(h) div 2];
+    Result[i] := Result[i + High(coeffs) div 2];
 
   SetLength(Result, Length(samples));
 end;
 
 function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
+var
+  l, h: TDoubleDynArray;
 begin
-  Assert(fch > fcl);
-  Result := DoFilter(fcl, transFactor, True, samples);
-  Result := DoFilter(fch, transFactor, False, Result);
+  l := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True);
+  h := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False);
+
+  Result := DoFilter(samples, h);
+  Result := DoFilter(Result, l);
 end;
 
 constructor TEncoder.Create(InFN, OutFN: String);
@@ -613,14 +633,13 @@ end;
 
 function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
 var
-  b, sinc, win, sum: Double;
+  sinc, win, sum: Double;
   i, N: Integer;
 begin
-  b := (exp(fc) - 1.0) * transFactor;
-  N := ceil(4 / b);
+  N := ceil(4.6 / transFactor);
   if (N mod 2) = 0 then N += 1;
 
-  //writeln('DoFilter ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
+  //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
 
   SetLength(Result, N);
   sum := 0;
@@ -632,6 +651,7 @@ begin
     else
       sinc := sin(sinc) / sinc;
 
+    // blackman window
     win := 0.42 - 0.5 * cos(2 * pi * i / (N - 1)) + 0.08 * cos(4 * pi * i / (N - 1));
 
     Result[i] := sinc * win;
@@ -643,7 +663,7 @@ begin
     for i := 0 to N - 1 do
       Result[i] := -Result[i] / sum;
 
-    Result[(N - 1) div 2] += 1;
+    Result[(N - 1) div 2] += 1.0;
   end
   else
   begin
@@ -655,6 +675,11 @@ end;
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
   Result := EnsureRange(round(smp * -Low(SmallInt)), Low(SmallInt), High(SmallInt));
+end;
+
+class function TEncoder.makeFloatSample(smp: SmallInt): Double;
+begin
+  Result := smp / -Low(SmallInt);
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
