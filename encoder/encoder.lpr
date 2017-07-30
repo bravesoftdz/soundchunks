@@ -2,7 +2,7 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort;
 
 const
   BandCount = 4;
@@ -11,6 +11,7 @@ const
   HighCut = 16000.0;
 
 type
+  TDoubleDynArrayList = specialize TFPGList<TDoubleDynArray>;
   TDoubleDynArray2 = array of TDoubleDynArray;
 
   TEncoder = class;
@@ -38,19 +39,18 @@ type
     reducedChunk: TChunk;
 
     index: Integer;
-    dctAddCount: Integer;
+
+    mixList: TDoubleDynArrayList;
 
     srcData: TDoubleDynArray;
-    dct: TDoubleDynArray;
     fft: TComplex1DArray;
 
     constructor Create(enc: TEncoder; bnd: TBand; idx: Integer);
 
-    procedure ComputeDCT;
     procedure ComputeFFT;
-    procedure InitDCTAdd;
-    procedure AddToDCT(ch: TChunk);
-    procedure FinalizeDCTAdd;
+    procedure InitMix;
+    procedure AddToMix(ch: TChunk);
+    procedure FinalizeMix;
   end;
 
   TChunkList = specialize TFPGObjectList<TChunk>;
@@ -127,6 +127,16 @@ type
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
       smpTst: TDoubleDynArray2): TDoubleDynArray;
   end;
+
+
+function CompareDouble(const d1, d2): integer;
+var
+  v1 : Double absolute d1;
+  v2 : Double absolute d2;
+begin
+  Result := CompareValue(v1, v2);
+end;
+
 
 constructor TSecondOrderCIC.Create(AR: Integer);
 begin
@@ -230,7 +240,6 @@ procedure TBand.MakeChunks;
   begin
     chunk := chunkList[AIndex];
 
-    chunk.ComputeDCT;
     chunk.ComputeFFT;
   end;
 
@@ -286,22 +295,22 @@ var
       end;
 
     reducedChunk := reducedChunks[AIndex];
-    reducedChunk.InitDCTAdd;
+    reducedChunk.InitMix;
 
     if First <> -1 then
       for i := 0 to chunkList.Count - 1 do
         if XYC[i] = AIndex then
         begin
-          reducedChunk.AddToDCT(chunkList[i]);
+          reducedChunk.AddToMix(chunkList[i]);
           chunkList[i].reducedChunk := reducedChunk;
         end;
 
-    reducedChunk.FinalizeDCTAdd;
+    reducedChunk.FinalizeMix;
   end;
 
 var
   FN, Line: String;
-  v1, v2, joinFactor: Double;
+  v1, v2, continuityFactor: Double;
   Dataset: TStringList;
   i, j : Integer;
 begin
@@ -313,13 +322,13 @@ begin
   Dataset := TStringList.Create;
   Dataset.LineBreak := #10;
 
-  joinFactor := chunkSize / chunkSizeUnMin;
+  continuityFactor := chunkSize / chunkSizeUnMin;
 
   try
     for i := 0 to chunkList.Count - 1 do
     begin
       Line := IntToStr(i) + ' ';
-      Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * joinFactor, chunkList[i].srcData[chunkSize - 1] * joinFactor]);
+      Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * continuityFactor, chunkList[i].srcData[chunkSize - 1] * continuityFactor]);
       for j := 0 to chunkSizeUnMin div 2 - 1 do
       begin
         v1 := chunkList[i].fft[j].X;
@@ -396,12 +405,6 @@ begin
   end;
 
   reducedChunk := Self;
-  SetLength(dct, band.chunkSize);
-end;
-
-procedure TChunk.ComputeDCT;
-begin
-  dct := TEncoder.ComputeDCT(band.chunkSize, srcData);
 end;
 
 procedure TChunk.ComputeFFT;
@@ -409,29 +412,48 @@ begin
   FFTR1D(srcData, band.chunkSize, fft);
 end;
 
-procedure TChunk.InitDCTAdd;
+procedure TChunk.InitMix;
 begin
-  dctAddCount := 0;
-  FillQWord(srcData[0], band.chunkSize, 0);
+  mixList := TDoubleDynArrayList.Create;
 end;
 
-procedure TChunk.AddToDCT(ch: TChunk);
-var
-  k: Integer;
+procedure TChunk.AddToMix(ch: TChunk);
 begin
-  for k := 0 to band.chunkSize - 1 do
-    srcData[k] += ch.srcData[k];
-  Inc(dctAddCount);
+  mixList.Add(ch.srcData);
 end;
 
-procedure TChunk.FinalizeDCTAdd;
+procedure TChunk.FinalizeMix;
 var
-  k: Integer;
+  i, k: Integer;
+  mixOne: TDoubleDynArray;
 begin
-  if dctAddCount = 0 then Exit;
+  if not Assigned(mixList) or (mixList.Count = 0) then
+    Exit;
 
+  if mixList.Count = 1 then
+  begin
+    srcData := Copy(mixList[0]);
+    Exit;
+  end;
+
+  SetLength(mixOne, mixList.Count);
   for k := 0 to band.chunkSize - 1 do
-    srcData[k] /= dctAddCount;
+  begin
+    for i := 0 to mixList.Count - 1 do
+      mixOne[i] := mixList[i][k];
+
+{$if false}
+    anysort.AnySort(mixOne[0], Length(mixOne), Sizeof(Double), @CompareDouble);
+    if Odd(mixList.Count) then
+      srcData[k] := mixOne[mixList.Count div 2]
+    else
+      srcData[k] := 0.5 * (mixOne[mixList.Count div 2] + mixOne[mixList.Count div 2 - 1]);
+{$else}
+    srcData[k] := mean(mixOne);
+{$endif}
+  end;
+
+  FreeAndNil(mixList);
 end;
 
 { TEncoder }
@@ -449,7 +471,7 @@ begin
     SetLength(srcData, srcDataCount + 65536);
     FillQWord(srcData[0], srcDataCount + 65536, 0);
     for i := 0 to srcDataCount - 1 do
-      srcData[i] := SmallInt(fs.ReadWord) / High(SmallInt);
+      srcData[i] := SmallInt(fs.ReadWord) / -Low(SmallInt);
   finally
     fs.Free;
   end;
@@ -488,7 +510,6 @@ end;
 
 procedure TEncoder.Save;
 var
-  i: Integer;
   fs: TFileStream;
 begin
   WriteLn('save ', outputFN);
@@ -635,7 +656,7 @@ end;
 
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
-  Result := EnsureRange(round(smp * High(SmallInt)), Low(SmallInt), High(SmallInt));
+  Result := EnsureRange(round(smp * -Low(SmallInt)), Low(SmallInt), High(SmallInt));
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
