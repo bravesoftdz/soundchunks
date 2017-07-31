@@ -6,6 +6,8 @@
 #include "timer.h"
 
 int main (int argc, char** argv) {
+  setbuf(stderr, NULL);
+  
   yakmo::option opt (argc, argv);
   yakmo::orthogonal_kmeans* m = new yakmo::orthogonal_kmeans (opt);
 

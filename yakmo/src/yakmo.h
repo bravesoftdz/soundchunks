@@ -1,8 +1,15 @@
 // yakmo -- yet another k-means via orthogonalization
 //  $Id: yakmo.h 1866 2015-01-21 10:25:43Z ynaga $
 // Copyright (c) 2012-2015 Naoki Yoshinaga <ynaga@tkl.iis.u-tokyo.ac.jp>
-#include <getopt.h>
-#include <err.h>
+
+#ifdef __GNUC__
+ #include <getopt.h>
+#else
+  #include "getopt.h"
+#endif
+
+#include "getline.h"
+#include "vs_support.h"
 #include <stdint.h>
 #include <ctime>
 #include <cstdio>
@@ -14,7 +21,7 @@
 #include <algorithm>
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include "../config.h"
 #endif
 
 #ifdef USE_MT19937
@@ -85,22 +92,22 @@ static struct option yakmo_long_options[] = {
   {NULL, 0, NULL, 0}
 };
 
-extern char* optarg;
-extern int   optind;
+//extern char* optarg;
+//extern int   optind;
 
 namespace yakmo
 {
-  typedef unsigned int  uint;
+  typedef unsigned int uint;
 #ifdef USE_FLOAT
   typedef float  fl_t;
 #else
   typedef double fl_t;
 #endif
-  static inline bool getLine (FILE*& fp, char*& line, size_t& read) {
+  static inline bool getLine (FILE*& fp, char*& line, int64_t& read) {
 #ifdef __APPLE__
     if ((line = fgetln (fp, &read)) == NULL) return false;
 #else
-    static ssize_t read_ = 0; static size_t size = 0; // static helps inlining
+    static int64_t read_ = 0; static int64_t size = 0; // static helps inlining
     if ((read_ = getline (&line, &size, fp)) == -1) return false;
     read = read_;
 #endif
@@ -638,7 +645,7 @@ namespace yakmo
       if (! fp)
         errx (1, "no such file: %s", train);
       char*  line = 0;
-      size_t read = 0;
+      int64_t read = 0;
       while (getLine (fp, line, read)) {
         char* ex (line), *ex_end (line + read - 1);
         while (ex != ex_end && ! isspace (*ex)) ++ex;
@@ -718,7 +725,7 @@ namespace yakmo
       if (! fp)
         errx (1, "no such file: %s", model);
       char*  line = 0;
-      size_t read = 0;
+      int64_t read = 0;
       if (! getLine (fp, line, read)) errx (1, "premature model: %s", model);
       _opt.m  = static_cast <uint> (std::strtol (line, NULL, 10));
       if (! getLine (fp, line, read)) errx (1, "premature model: %s", model);
@@ -752,7 +759,7 @@ namespace yakmo
       if (! fp)
         errx (1, "no such file: %s", test);
       char*  line = 0;
-      size_t read = 0;
+      int64_t read = 0;
       while (getLine (fp, line, read)) {
         char* ex (line), *ex_end (line + read - 1);
         while (ex != ex_end && ! isspace (*ex)) ++ex;

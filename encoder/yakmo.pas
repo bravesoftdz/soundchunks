@@ -149,7 +149,9 @@ begin
 
     DeleteFile(PChar(AFN));
 
-    OutSL.LineBreak := #10;
+    if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
+      OutSL.LineBreak := #10;
+
     OutSL.Text := Output;
 
     for i := 0 to OutSL.Count - 1 do
