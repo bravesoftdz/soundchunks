@@ -158,6 +158,9 @@ begin
     begin
       Line := OutSL[i];
 
+      if Line = '' then
+        Continue;
+
       Inp := StrToInt(Copy(Line, 1, Pos(' ', Line) - 1));
       Clu := StrToIntDef(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), 0);
 

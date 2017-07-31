@@ -197,8 +197,8 @@ begin
 
   // undersample if the band high freq is a lot lower than nyquist
 
-  chunkSize := round(intpower(2.0, ceil(-log2(fcl))));
-  underSample := round(intpower(2.0, floor(-log2(fch))));
+  chunkSize := round(intpower(2.0, round(-log2(fcl))));
+  underSample := round(intpower(2.0, round(-log2(fch)) - 1));
   underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 

@@ -3,37 +3,38 @@
   <ProjectSession>
     <PathDelim Value="\"/>
     <Version Value="10"/>
-    <BuildModes Active="Release"/>
-    <Units Count="22">
+    <BuildModes Active="Debug"/>
+    <Units Count="31">
       <Unit0>
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
-        <TopLine Value="303"/>
-        <CursorPos X="60" Y="311"/>
+        <IsVisibleTab Value="True"/>
+        <TopLine Value="623"/>
+        <CursorPos X="3" Y="627"/>
         <UsageCount Value="200"/>
         <Bookmarks Count="3">
-          <Item0 X="16" Y="265" ID="1"/>
-          <Item1 X="26" Y="376" ID="2"/>
-          <Item2 X="18" Y="199" ID="3"/>
+          <Item0 X="26" Y="415" ID="2"/>
+          <Item1 X="18" Y="238" ID="3"/>
+          <Item2 X="3" Y="653" ID="1"/>
         </Bookmarks>
         <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit0>
       <Unit1>
         <Filename Value="yakmo.pas"/>
         <IsPartOfProject Value="True"/>
-        <IsVisibleTab Value="True"/>
-        <EditorIndex Value="2"/>
-        <TopLine Value="116"/>
-        <CursorPos X="79" Y="154"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="11" Y="10"/>
         <UsageCount Value="200"/>
-        <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit1>
       <Unit2>
         <Filename Value="anysort.pas"/>
         <IsPartOfProject Value="True"/>
         <EditorIndex Value="-1"/>
         <CursorPos Y="73"/>
-        <UsageCount Value="65"/>
+        <UsageCount Value="68"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit2>
       <Unit3>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\inc\systemh.inc"/>
@@ -61,6 +62,7 @@
         <TopLine Value="691"/>
         <CursorPos X="42" Y="724"/>
         <UsageCount Value="22"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit6>
       <Unit7>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\objpas\math.pp"/>
@@ -75,6 +77,7 @@
         <TopLine Value="176"/>
         <CursorPos X="5" Y="212"/>
         <UsageCount Value="12"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit8>
       <Unit9>
         <Filename Value="alglib\ap.pas"/>
@@ -83,6 +86,7 @@
         <TopLine Value="17"/>
         <CursorPos X="5" Y="48"/>
         <UsageCount Value="8"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit9>
       <Unit10>
         <Filename Value="filters\filterfirhpwin.pas"/>
@@ -91,14 +95,14 @@
         <TopLine Value="109"/>
         <CursorPos X="4" Y="111"/>
         <UsageCount Value="8"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit10>
       <Unit11>
         <Filename Value="alglib\conv.pas"/>
-        <EditorIndex Value="1"/>
-        <TopLine Value="486"/>
-        <CursorPos X="5" Y="472"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="11" Y="51"/>
         <UsageCount Value="25"/>
-        <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit11>
       <Unit12>
         <Filename Value="alglib\ftbase.pas"/>
@@ -106,11 +110,13 @@
         <TopLine Value="1226"/>
         <CursorPos X="184" Y="1235"/>
         <UsageCount Value="17"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit12>
       <Unit13>
         <Filename Value="C:\Users\SFXGLI~1\AppData\Local\Temp\7zO4E229A02\Filter.pas"/>
         <EditorIndex Value="-1"/>
         <UsageCount Value="2"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit13>
       <Unit14>
         <Filename Value="lazfilters\filteriirlpchebyshev.pas"/>
@@ -119,6 +125,7 @@
         <TopLine Value="77"/>
         <CursorPos X="4" Y="80"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit14>
       <Unit15>
         <Filename Value="lazfilters\Filter.pas"/>
@@ -126,6 +133,7 @@
         <TopLine Value="43"/>
         <CursorPos X="3" Y="47"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit15>
       <Unit16>
         <Filename Value="lazfilters\UConst.pas"/>
@@ -133,6 +141,7 @@
         <TopLine Value="8"/>
         <CursorPos X="3" Y="39"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit16>
       <Unit17>
         <Filename Value="lazfilters\UOperator.pas"/>
@@ -140,6 +149,7 @@
         <TopLine Value="6"/>
         <CursorPos X="3" Y="37"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit17>
       <Unit18>
         <Filename Value="lazfilters\filteriir.pas"/>
@@ -148,6 +158,7 @@
         <TopLine Value="35"/>
         <CursorPos X="3" Y="48"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit18>
       <Unit19>
         <Filename Value="lazfilters\filteriirlp.pas"/>
@@ -157,12 +168,14 @@
         <TopLine Value="10"/>
         <CursorPos X="3" Y="41"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit19>
       <Unit20>
         <Filename Value="lazfilters\FilterIRRAuxSetup1.inc"/>
         <EditorIndex Value="-1"/>
         <CursorPos X="69" Y="11"/>
         <UsageCount Value="6"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit20>
       <Unit21>
         <Filename Value="C:\lazarus\fpc\3.0.2\source\rtl\objpas\fgl.pp"/>
@@ -170,133 +183,214 @@
         <TopLine Value="52"/>
         <UsageCount Value="7"/>
       </Unit21>
+      <Unit22>
+        <Filename Value="acs\acs_filters.pas"/>
+        <EditorIndex Value="2"/>
+        <TopLine Value="453"/>
+        <CursorPos Y="498"/>
+        <UsageCount Value="11"/>
+        <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit22>
+      <Unit23>
+        <Filename Value="acs\acs_classes.pas"/>
+        <EditorIndex Value="3"/>
+        <TopLine Value="1043"/>
+        <CursorPos Y="1074"/>
+        <UsageCount Value="11"/>
+        <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit23>
+      <Unit24>
+        <Filename Value="acs\acs_procs.pas"/>
+        <EditorIndex Value="-1"/>
+        <TopLine Value="230"/>
+        <CursorPos X="39" Y="236"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit24>
+      <Unit25>
+        <Filename Value="acs\src\filters\acs_cdrom.pas"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="23" Y="23"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit25>
+      <Unit26>
+        <Filename Value="acs\src\filters\acs_mixer.pas"/>
+        <EditorIndex Value="-1"/>
+        <TopLine Value="16"/>
+        <CursorPos X="2" Y="146"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit26>
+      <Unit27>
+        <Filename Value="acs\src\formats\acs_dsfiles.pas"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="26" Y="22"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit27>
+      <Unit28>
+        <Filename Value="acs\src\formats\general\flac.pas"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="113" Y="20"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit28>
+      <Unit29>
+        <Filename Value="acs\packages\laz_acs.pas"/>
+        <EditorIndex Value="-1"/>
+        <CursorPos X="12" Y="10"/>
+        <UsageCount Value="10"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit29>
+      <Unit30>
+        <Filename Value="acs\acs_streams.pas"/>
+        <EditorIndex Value="1"/>
+        <TopLine Value="50"/>
+        <CursorPos Y="79"/>
+        <UsageCount Value="10"/>
+        <Loaded Value="True"/>
+        <DefaultSyntaxHighlighter Value="Delphi"/>
+      </Unit30>
     </Units>
     <OtherDefines Count="1">
-      <Define0 Value="RELEASE"/>
+      <Define0 Value="DEBUG"/>
     </OtherDefines>
     <JumpHistory Count="30" HistoryIndex="29">
       <Position1>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="263" Column="30" TopLine="230"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="487" TopLine="453"/>
       </Position1>
       <Position2>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="12" Column="32" TopLine="2"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="488" TopLine="453"/>
       </Position2>
       <Position3>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="267" Column="73" TopLine="230"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="489" TopLine="453"/>
       </Position3>
       <Position4>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="377" Column="39" TopLine="349"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="491" TopLine="453"/>
       </Position4>
       <Position5>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="166" Column="24" TopLine="156"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="492" TopLine="453"/>
       </Position5>
       <Position6>
-        <Filename Value="encoder.lpr"/>
-        <Caret Line="169" Column="13" TopLine="156"/>
+        <Filename Value="acs\acs_filters.pas"/>
+        <Caret Line="498" TopLine="453"/>
       </Position6>
       <Position7>
         <Filename Value="encoder.lpr"/>
+        <Caret Line="648" TopLine="616"/>
       </Position7>
       <Position8>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="271" TopLine="230"/>
+        <Caret Line="641" TopLine="616"/>
       </Position8>
       <Position9>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="385" Column="25" TopLine="349"/>
+        <Caret Line="653" TopLine="616"/>
       </Position9>
       <Position10>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="27" Column="33"/>
+        <Caret Line="639" TopLine="616"/>
       </Position10>
       <Position11>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="266" TopLine="230"/>
+        <Caret Line="654" TopLine="616"/>
       </Position11>
       <Position12>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="261" Column="16" TopLine="230"/>
+        <Caret Line="645" Column="32" TopLine="616"/>
       </Position12>
       <Position13>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="372" Column="26" TopLine="341"/>
+        <Caret Line="44" Column="26"/>
       </Position13>
       <Position14>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="261" Column="16" TopLine="230"/>
+        <Caret Line="638" Column="26" TopLine="622"/>
       </Position14>
       <Position15>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="31" Column="17" TopLine="19"/>
+        <Caret Line="646" TopLine="622"/>
       </Position15>
       <Position16>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="265" Column="67" TopLine="230"/>
+        <Caret Line="647" TopLine="622"/>
       </Position16>
       <Position17>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="184" Column="20" TopLine="147"/>
+        <Caret Line="648" TopLine="622"/>
       </Position17>
       <Position18>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="372" Column="26" TopLine="341"/>
+        <Caret Line="641" TopLine="622"/>
       </Position18>
       <Position19>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="261" Column="16" TopLine="230"/>
+        <Caret Line="653" TopLine="622"/>
       </Position19>
       <Position20>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="372" Column="26" TopLine="341"/>
+        <Caret Line="639" TopLine="622"/>
       </Position20>
       <Position21>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="263" Column="69" TopLine="230"/>
+        <Caret Line="654" TopLine="622"/>
       </Position21>
       <Position22>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="35" Column="14" TopLine="4"/>
+        <Caret Line="315" TopLine="285"/>
       </Position22>
       <Position23>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="173" Column="31" TopLine="142"/>
+        <Caret Line="316" TopLine="285"/>
       </Position23>
       <Position24>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="269" Column="31" TopLine="234"/>
+        <Caret Line="646" TopLine="614"/>
       </Position24>
       <Position25>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="381" Column="25" TopLine="343"/>
+        <Caret Line="656" Column="59" TopLine="614"/>
       </Position25>
       <Position26>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="187" Column="27" TopLine="147"/>
+        <Caret Line="646" Column="18" TopLine="623"/>
       </Position26>
       <Position27>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="12" Column="33"/>
+        <Caret Line="9" Column="25"/>
       </Position27>
       <Position28>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="879" Column="47" TopLine="839"/>
+        <Caret Line="648" Column="35" TopLine="622"/>
       </Position28>
       <Position29>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="50" Column="31"/>
+        <Caret Line="639" TopLine="622"/>
       </Position29>
       <Position30>
         <Filename Value="encoder.lpr"/>
-        <Caret Line="845" Column="17" TopLine="839"/>
+        <Caret Line="646" Column="27" TopLine="622"/>
       </Position30>
     </JumpHistory>
   </ProjectSession>
   <Debugging>
+    <BreakPoints Count="1">
+      <Item1>
+        <Kind Value="bpkSource"/>
+        <WatchScope Value="wpsLocal"/>
+        <WatchKind Value="wpkWrite"/>
+        <Source Value="encoder.lpr"/>
+        <Line Value="653"/>
+      </Item1>
+    </BreakPoints>
     <Watches Count="4">
       <Item1>
         <Expression Value="joinindex"/>
