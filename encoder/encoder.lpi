@@ -31,7 +31,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir)"/>
-            <OtherUnitFiles Value="multithreadprocs;alglib;acs"/>
+            <OtherUnitFiles Value="multithreadprocs;alglib;ffmpeg"/>
             <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -77,7 +77,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir)"/>
-            <OtherUnitFiles Value="multithreadprocs;alglib;acs"/>
+            <OtherUnitFiles Value="multithreadprocs;alglib;ffmpeg"/>
             <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -116,7 +116,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn.wav ..\out2.wav 0.2 0 0"/>
+        <CommandLineParams Value="..\opus_test\mo_62_32.wav ..\out2.wav 0.1 50"/>
       </local>
     </RunParams>
     <Units Count="3">
@@ -142,7 +142,7 @@
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>
-      <OtherUnitFiles Value="multithreadprocs;alglib;acs"/>
+      <OtherUnitFiles Value="multithreadprocs;alglib;ffmpeg"/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

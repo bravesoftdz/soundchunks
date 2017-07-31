@@ -6,7 +6,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 
 const
   BandCount = 4;
-  BandTransFactor = 0.5;
+  BandTransFactor = 0.1;
   LowCut = 40.0;
   HighCut = 16000.0;
   BandDealiasSecondOrder = True;
@@ -147,7 +147,7 @@ end;
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
   SecondOrder := ASecondOrder;
-  CorrectionFactor := ifthen(SecondOrder, 4.0, 1.0);
+  CorrectionFactor := ifthen(SecondOrder, 3.0, 1.0);
   Ratio := ARatio;
   R := max(1, ARatio);
   SetLength(vs, R);
@@ -198,7 +198,7 @@ begin
   // undersample if the band high freq is a lot lower than nyquist
 
   chunkSize := round(intpower(2.0, round(-log2(fcl))));
-  underSample := round(intpower(2.0, round(-log2(fch)) - 1));
+  underSample := round(intpower(2.0, round(-log2(fch)) - 2));
   underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 
@@ -262,7 +262,7 @@ begin
   srcData := Copy(encoder.srcData);
 
   // compensate for decoder altering the pass band
-  cic := TSecondOrderCIC.Create(underSample, BandDealiasSecondOrder);
+  cic := TSecondOrderCIC.Create(underSample * 2, BandDealiasSecondOrder);
   try
     for i := -cic.Ratio + 1 to High(srcData) do
       srcData[Max(0, i)] := encoder.srcData[Max(0, i)] * (cic.CorrectionFactor + 1) -
@@ -371,7 +371,7 @@ begin
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
-  cic := TSecondOrderCIC.Create(underSample, BandDealiasSecondOrder);
+  cic := TSecondOrderCIC.Create(underSample * 2, BandDealiasSecondOrder);
   pos := -cic.Ratio + 1;
   try
     for i := 0 to chunkList.Count - 1 do
@@ -417,7 +417,7 @@ begin
     pos := (idx * band.chunkSize + j) * band.underSample;
     acc := 0.0;
     for k := 0 to band.underSample - 1 do
-      acc += band.srcData[min(High(band.srcData), pos + k)];
+      acc += band.srcData[EnsureRange(pos - k, 0, High(band.srcData))];
     srcData[j] := acc / band.underSample;
   end;
 
@@ -600,8 +600,8 @@ begin
   l := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True);
   h := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False);
 
-  Result := DoFilter(samples, h);
-  Result := DoFilter(Result, l);
+  Result := DoFilter(samples, l);
+  Result := DoFilter(Result, h);
 end;
 
 constructor TEncoder.Create(InFN, OutFN: String);
@@ -861,7 +861,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [iter count 1-inf] [min chunk size 1-inf]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [iter count 1-inf] [min chunk size 2-inf]');
       WriteLn;
       Exit;
     end;
@@ -870,7 +870,7 @@ begin
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.restartCount := StrToIntDef(ParamStr(4), 10);
-    enc.minChunkSize := StrToIntDef(ParamStr(5), 16);
+    enc.minChunkSize := StrToIntDef(ParamStr(5), 2);
 
     try
 
