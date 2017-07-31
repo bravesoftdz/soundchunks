@@ -1,8 +1,9 @@
 // yakmo -- yet another k-means via orthogonalization
 //  $Id: yakmo.h 1866 2015-01-21 10:25:43Z ynaga $
 // Copyright (c) 2012-2015 Naoki Yoshinaga <ynaga@tkl.iis.u-tokyo.ac.jp>
-#include <getopt.h>
-#include <err.h>
+#include "getopt.h"
+#include "getline.h"
+#include "vs_support.h"
 #include <stdint.h>
 #include <ctime>
 #include <cstdio>
@@ -14,7 +15,7 @@
 #include <algorithm>
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include "../config.h"
 #endif
 
 #ifdef USE_MT19937
@@ -85,12 +86,12 @@ static struct option yakmo_long_options[] = {
   {NULL, 0, NULL, 0}
 };
 
-extern char* optarg;
-extern int   optind;
+//extern char* optarg;
+//extern int   optind;
 
 namespace yakmo
 {
-  typedef unsigned int  uint;
+  typedef unsigned int uint;
 #ifdef USE_FLOAT
   typedef float  fl_t;
 #else
@@ -100,7 +101,7 @@ namespace yakmo
 #ifdef __APPLE__
     if ((line = fgetln (fp, &read)) == NULL) return false;
 #else
-    static ssize_t read_ = 0; static size_t size = 0; // static helps inlining
+    static size_t read_ = 0; static size_t size = 0; // static helps inlining
     if ((read_ = getline (&line, &size, fp)) == -1) return false;
     read = read_;
 #endif

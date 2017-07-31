@@ -80,7 +80,7 @@
 #define STDC_HEADERS 1
 
 /* float as floating-point numbers */
-/* #undef USE_FLOAT */
+#define USE_FLOAT 1
 
 /* hash support */
 #define USE_HASH 1

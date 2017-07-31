@@ -1,2 +1,3 @@
 #!/bin/sh
-make clean && make CFLAGS="-flto -fuse-linker-plugin -Ofast" CPPFLAGS="-flto -fuse-linker-plugin -Ofast" LDFLAGS="-flto -fuse-linker-plugin -Ofast" && cp src/yakmo ../encoder
+flags="-flto -fuse-linker-plugin -O4"
+make clean && make CFLAGS="$flags" CPPFLAGS="$flags" LDFLAGS="$flags" && make install-strip && cp /mingw64/bin/yakmo ../encoder
