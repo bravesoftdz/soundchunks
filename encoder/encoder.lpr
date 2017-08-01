@@ -95,7 +95,7 @@ type
   public
     inputFN, outputFN: String;
     quality: Double;
-    restartCount: Integer;
+    iterationCount: Integer;
     sampleRate: Integer;
     minChunkSize: Integer;
     srcDataCount: Integer;
@@ -134,6 +134,8 @@ type
       smpTst: TDoubleDynArray2): TDoubleDynArray;
   end;
 
+
+function IsDebuggerPresent () : LongBool stdcall; external 'kernel32.dll';
 
 function CompareDouble(const d1, d2): integer;
 var
@@ -318,9 +320,11 @@ var
   FN, Line: String;
   v1, v2, continuityFactor: Double;
   Dataset: TStringList;
-  i, j, offset : Integer;
+  i, j, offset, itc : Integer;
 begin
-  if encoder.restartCount <= 0 then Exit;
+  itc := encoder.iterationCount;
+  if itc = 0 then Exit;
+  if itc < 0 then itc := -itc * encoder.bands[0].chunkCount div chunkCount;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -353,7 +357,7 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, encoder.RestartCount, False, XYC);
+  DoExternalKMeans(FN, desiredChunkCount, itc, False, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -548,7 +552,7 @@ procedure TEncoder.FindBestDesiredChunksCounts;
 var
   bnd: TBand;
   fsq: Double;
-  dbBatt: array[0 .. BandCount - 1] of Double;
+  wgtCurve: array[0 .. BandCount - 1] of Double;
   i, allSz: Integer;
   sz: Double;
   full: Boolean;
@@ -557,10 +561,16 @@ begin
   begin
     bnd := bands[i];
 
-    fsq := bnd.fcl * sampleRate * bnd.fch * sampleRate;
-    dbBatt[i] := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
+    fsq := sqr((0.5 * bnd.fcl + 0.5 * bnd.fch) * sampleRate);
+{$if true}
+    // B-weighting
+    wgtCurve[i] := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
+{$else}
+    // A-weighting
+    wgtCurve[i] := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
+{$endif}
 
-    dbBatt[i] /= bnd.chunkSizeUnMin;
+    wgtCurve[i] /= bnd.chunkSizeUnMin;
   end;
 
   sz := 1;
@@ -571,7 +581,7 @@ begin
     begin
       bnd := bands[i];
 
-      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * dbBatt[i]));
+      bnd.desiredChunkCount := min(bnd.chunkCount, round(sz * wgtCurve[i]));
       full := full and (bnd.desiredChunkCount = bnd.chunkCount);
 
       allSz += bnd.desiredChunkCount * bnd.chunkSize;
@@ -864,7 +874,7 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: (source file must be 16bit mono WAV)');
-      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [iter count 1-inf] [min chunk size 2-inf]');
+      writeln(ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [quality 0.0-1.0] [iter count (0 = "lossless"; neg = relative to band)] [min chunk size 2-inf]');
       WriteLn;
       Exit;
     end;
@@ -872,7 +882,7 @@ begin
     enc := TEncoder.Create(ParamStr(1), ParamStr(2));
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-    enc.restartCount := StrToIntDef(ParamStr(4), 10);
+    enc.iterationCount := StrToIntDef(ParamStr(4), -100);
     enc.minChunkSize := StrToIntDef(ParamStr(5), 2);
 
     try
@@ -886,12 +896,14 @@ begin
       enc.Free;
     end;
 
-{$if true}
+{$if false}
     ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
 {$else}
     DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, False, 2048);
-    ReadLn;
 {$endif}
+
+    if IsDebuggerPresent then
+      ReadLn;
 
   except
     on e: Exception do

@@ -116,7 +116,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\opus_test\mo_10_32.wav ..\out2.wav 0.2 5"/>
+        <CommandLineParams Value="..\lame_test\testsignal2.wav ..\out2.wav 0.2 -500"/>
       </local>
     </RunParams>
     <Units Count="3">
