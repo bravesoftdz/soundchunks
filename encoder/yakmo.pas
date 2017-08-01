@@ -157,14 +157,9 @@ begin
     for i := 0 to OutSL.Count - 1 do
     begin
       Line := OutSL[i];
-
-      if Line = '' then
-        Continue;
-
-      Inp := StrToInt(Copy(Line, 1, Pos(' ', Line) - 1));
-      Clu := StrToIntDef(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), 0);
-
-      XYC[Inp] := Clu;
+      if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
+          TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
+        XYC[Inp] := Clu;
     end;
   finally
     OutputStream.Free;

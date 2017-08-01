@@ -318,7 +318,7 @@ var
   FN, Line: String;
   v1, v2, continuityFactor: Double;
   Dataset: TStringList;
-  i, j : Integer;
+  i, j, offset : Integer;
 begin
   if encoder.restartCount <= 0 then Exit;
 
@@ -329,17 +329,20 @@ begin
   Dataset.LineBreak := #10;
 
   continuityFactor := chunkSize / chunkSizeUnMin;
-
+  offset := ifthen(continuityFactor > 1, 2, 0);
   try
     for i := 0 to chunkList.Count - 1 do
     begin
       Line := IntToStr(i) + ' ';
-      Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * continuityFactor, chunkList[i].srcData[chunkSize - 1] * continuityFactor]);
+
+      if continuityFactor > 1 then
+        Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * continuityFactor, chunkList[i].srcData[chunkSize - 1] * continuityFactor]);
+
       for j := 0 to chunkSizeUnMin div 2 - 1 do
       begin
         v1 := chunkList[i].fft[j].X;
         v2 := chunkList[i].fft[j].Y;
-        Line := Line + Format('%d:%.12g %d:%.12g ', [j * 2 + 2, v1, j * 2 + 3, v2]);
+        Line := Line + Format('%d:%.12g %d:%.12g ', [j * 2 + offset, v1, j * 2 + 1 + offset, v2]);
       end;
       Dataset.Add(Line);
     end;
