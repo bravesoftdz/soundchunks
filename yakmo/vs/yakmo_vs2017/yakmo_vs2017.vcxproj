@@ -24,14 +24,12 @@
     <ClInclude Include="..\..\src\getopt.h" />
     <ClInclude Include="..\..\src\vs_support.h" />
     <ClInclude Include="..\..\src\timer.h" />
-    <ClInclude Include="..\..\src\xxhash.h" />
     <ClInclude Include="..\..\src\yakmo.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\getline.c" />
     <ClCompile Include="..\..\src\getopt.c" />
     <ClCompile Include="..\..\src\timer.cc" />
-    <ClCompile Include="..\..\src\xxhash.c" />
     <ClCompile Include="..\..\src\yakmo.cc" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

@@ -6,8 +6,9 @@
 #include "timer.h"
 
 int main (int argc, char** argv) {
-  setbuf(stderr, NULL);
-  
+  setvbuf(stdout, NULL, _IONBF, 0);
+  setvbuf(stderr, NULL, _IONBF, 0);
+
   yakmo::option opt (argc, argv);
   yakmo::orthogonal_kmeans* m = new yakmo::orthogonal_kmeans (opt);
 
@@ -34,5 +35,6 @@ int main (int argc, char** argv) {
   }
   delete m;
   TIMER (timer_pool.print ());
+
   return 0;
 }

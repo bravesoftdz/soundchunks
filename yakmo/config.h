@@ -89,7 +89,7 @@
 /* #undef USE_MT19937 */
 
 /* timer support */
-#define USE_TIMER 1
+/* #undef USE_TIMER */
 
 /* hash support (TR1) */
 /* #undef USE_TR1_HASH */
