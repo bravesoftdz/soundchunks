@@ -564,7 +564,8 @@ begin
   begin
     bnd := bands[i];
 
-    fsq := sqr((0.5 * bnd.fcl + 0.5 * bnd.fch) * sampleRate);
+    fsq := bnd.fcl * bnd.fch * sampleRate * sampleRate;
+
 {$if BandBWeighting}
     // B-weighting
     wgtCurve[i] := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
@@ -572,8 +573,6 @@ begin
     // A-weighting
     wgtCurve[i] := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
 {$endif}
-
-    wgtCurve[i] /= Max(1, bnd.chunkSizeUnMin);
   end;
 
   sz := 1;
