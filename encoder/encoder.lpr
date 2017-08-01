@@ -7,9 +7,10 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 const
   BandCount = 4;
   BandTransFactor = 0.1;
-  LowCut = 40.0;
+  LowCut = 30.0;
   HighCut = 16000.0;
-  BandDealiasSecondOrder = True;
+  BandDealiasSecondOrder = True; // otherwise first order
+  BandBWeighting = False; // otherwise A-weighting
 
 type
   TDoubleDynArrayList = specialize TFPGList<TDoubleDynArray>;
@@ -178,29 +179,31 @@ end;
 
 constructor TBand.Create(enc: TEncoder; idx: Integer);
 var
-  ratio: Double;
+  hc, ratioP, ratioL: Double;
 begin
   encoder := enc;
   index := idx;
 
   // determing low and high bandpass frequencies
 
-  ratio := round(log2(LowCut / encoder.sampleRate * 2.0) / BandCount);
+  hc := min(HighCut, encoder.sampleRate / 2);
+  ratioP := log2(LowCut / hc) / BandCount + 0.5;
+  ratioL := hc / encoder.sampleRate;
 
   if index = 0 then
     fcl := LowCut / encoder.sampleRate
   else
-    fcl := 0.5 * power(2.0, (BandCount - index) * ratio);
+    fcl := power(2.0, (BandCount - index) * ratioP) * ratioL;
 
   if index = BandCount - 1 then
-    fch := HighCut / encoder.sampleRate
+    fch := hc / encoder.sampleRate
   else
-    fch := 0.5 * power(2.0, (BandCount - 1 - index) * ratio);
+    fch := power(2.0, (BandCount - 1 - index) * ratioP) * ratioL;
 
   // undersample if the band high freq is a lot lower than nyquist
 
-  chunkSize := round(intpower(2.0, round(-log2(fcl))));
-  underSample := round(intpower(2.0, round(-log2(fch)) - 2));
+  chunkSize := round(intpower(2.0, floor(-log2(fcl))));
+  underSample := round(intpower(2.0, floor(-log2(fch)) - 2));
   underSample := Max(1, underSample);
   chunkSize := chunkSize div underSample;
 
@@ -562,7 +565,7 @@ begin
     bnd := bands[i];
 
     fsq := sqr((0.5 * bnd.fcl + 0.5 * bnd.fch) * sampleRate);
-{$if true}
+{$if BandBWeighting}
     // B-weighting
     wgtCurve[i] := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)));
 {$else}
@@ -570,7 +573,7 @@ begin
     wgtCurve[i] := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
 {$endif}
 
-    wgtCurve[i] /= bnd.chunkSizeUnMin;
+    wgtCurve[i] /= Max(1, bnd.chunkSizeUnMin);
   end;
 
   sz := 1;
