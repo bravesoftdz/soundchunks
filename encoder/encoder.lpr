@@ -11,6 +11,7 @@ const
   HighCut = 16000.0;
   BandDealiasSecondOrder = True; // otherwise first order
   BandBWeighting = True; // otherwise A-weighting
+  OutputBitDepth = 8; // max 8Bits
 
 type
   TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
@@ -45,11 +46,14 @@ type
     reducedChunk: TChunk;
 
     index: Integer;
+    bitRange: Integer;
+    dstBitShift: Integer;
 
     mixList: TComplex1DArrayList;
 
     srcData: TDoubleDynArray;
     fft: TComplex1DArray;
+    dstData: TByteDynArray;
 
     constructor Create(enc: TEncoder; bnd: TBand; idx: Integer);
 
@@ -57,6 +61,8 @@ type
     procedure InitMix;
     procedure AddToMix(ch: TChunk);
     procedure FinalizeMix;
+    procedure ComputeBitRange;
+    procedure MakeDstData;
   end;
 
   TChunkList = specialize TFPGObjectList<TChunk>;
@@ -110,7 +116,9 @@ type
     bands: array[0..BandCount - 1] of TBand;
 
     class function make16BitSample(smp: Double): SmallInt;
-    class function makeFloatSample(smp: SmallInt): Double;
+    class function makeOutputSample(smp: Double; bitShift: Integer): Byte;
+    class function makeFloatSample(smp: SmallInt): Double; overload;
+    class function makeFloatSample(smp: Byte; bitShift: Integer): Double; overload;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; compress: Boolean; const dctA, dctB: TDoubleDynArray): Double;
@@ -327,6 +335,7 @@ var
       end;
 
     reducedChunk.FinalizeMix;
+    reducedChunk.MakeDstData;
   end;
 
 var
@@ -407,9 +416,12 @@ begin
     begin
       chunk := chunkList[i];
 
+      if (chunk.reducedChunk.dstData = nil) then
+        chunk.reducedChunk.MakeDstData;
+
       for j := 0 to chunkSize - 1 do
       begin
-        smp := chunk.reducedChunk.srcData[j];
+        smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], chunk.reducedChunk.dstBitShift);
         for k := 0 to underSample - 1 do
         begin
           dstData[max(0, pos)] := cic.ProcessSample(Smp);
@@ -497,6 +509,27 @@ begin
   FFTR1DInv(fft, band.chunkSize, srcData);
 
   FreeAndNil(mixList);
+end;
+
+procedure TChunk.ComputeBitRange;
+var
+  i, hiSmp: Integer;
+begin
+  hiSmp := 0;
+  for i := 0 to band.chunkSize - 1 do
+    hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
+  bitRange := EnsureRange(1 + ceil(log2(hiSmp)), OutputBitDepth, 16);
+end;
+
+procedure TChunk.MakeDstData;
+var
+  i: Integer;
+begin
+  ComputeBitRange;
+  dstBitShift := bitRange - OutputBitDepth;
+  SetLength(dstData, band.chunkSize);
+  for i := 0 to band.chunkSize - 1 do
+    dstData[i] := TEncoder.makeOutputSample(srcData[i], dstBitShift);
 end;
 
 { TEncoder }
@@ -716,9 +749,27 @@ begin
   Result := EnsureRange(round(smp * -Low(SmallInt)), Low(SmallInt), High(SmallInt));
 end;
 
+class function TEncoder.makeOutputSample(smp: Double; bitShift: Integer): Byte;
+var
+  smp16: SmallInt;
+begin
+  smp16 := make16BitSample(smp);
+  smp16 := (smp16 - (sign(smp16) shl (max(0, bitShift - 1)))) div (1 shl bitShift);
+  Result := EnsureRange(smp16 + (1 shl (OutputBitDepth - 1)), 0, (1 shl OutputBitDepth) - 1);
+end;
+
 class function TEncoder.makeFloatSample(smp: SmallInt): Double;
 begin
   Result := smp / -Low(SmallInt);
+end;
+
+class function TEncoder.makeFloatSample(smp: Byte; bitShift: Integer): Double;
+var
+  smp16: SmallInt;
+begin
+  smp16 := SmallInt(smp) - (1 shl (OutputBitDepth - 1));
+  smp16 := smp16 * (1 shl bitShift);
+  Result := makeFloatSample(smp16);
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;

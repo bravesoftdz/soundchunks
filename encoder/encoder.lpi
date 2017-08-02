@@ -48,6 +48,9 @@
               <StackChecks Value="True"/>
             </Checks>
             <VerifyObjMethodCallValidity Value="True"/>
+            <Optimizations>
+              <OptimizationLevel Value="0"/>
+            </Optimizations>
           </CodeGeneration>
           <Linking>
             <Debugging>
@@ -116,7 +119,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\lame_test\ftb_samp.wav ..\out2.wav 0.1 -25"/>
+        <CommandLineParams Value="..\lame_test\ftb_samp.wav ..\out2.wav 0.1 0"/>
       </local>
     </RunParams>
     <Units Count="3">
