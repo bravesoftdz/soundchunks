@@ -10,7 +10,7 @@ const
   LowCut = 30.0;
   HighCut = 16000.0;
   BandDealiasSecondOrder = True; // otherwise first order
-  BandBWeighting = False; // otherwise A-weighting
+  BandBWeighting = True; // otherwise A-weighting
 
 type
   TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
@@ -128,7 +128,7 @@ type
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
-    function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoBPFilter(fcl, fch, transFactor: Double; underSample: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
@@ -287,7 +287,7 @@ begin
     cic.Free;
   end;
 
-  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, srcData);
+  srcData := encoder.DoBPFilter(fcl, fch, BandTransFactor, 1, srcData);
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
@@ -323,14 +323,14 @@ var
 
 var
   FN, Line: String;
-  v1, v2, continuityFactor: Double;
+  v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
   Dataset: TStringList;
   i, j, offset, itc: Integer;
   chunk: TChunk;
 begin
   itc := encoder.iterationCount;
   if itc = 0 then Exit;
-  if itc < 0 then itc := -itc * encoder.bands[BandCount - 1].chunkCount div chunkCount;
+  if itc < 0 then itc := min(250, -itc * encoder.bands[BandCount - 1].chunkCount div chunkCount);
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -339,20 +339,26 @@ begin
   Dataset.LineBreak := #10;
 
   continuityFactor := chunkSize / chunkSizeUnMin;
-  offset := ifthen(continuityFactor > 1, 2, 0);
+  offset := 4;
   try
     for i := 0 to chunkList.Count - 1 do
     begin
       Line := IntToStr(i) + ' ';
 
-      if continuityFactor > 1 then
-        Line := Line + Format('0:%.12g 1:%.12g ', [chunkList[i].srcData[0] * continuityFactor, chunkList[i].srcData[chunkSize - 1] * continuityFactor]);
+      // add first and last sample to features to allow continuity between chunks
+      sl := chunkList[i].srcData[0];
+      sh := chunkList[i].srcData[chunkSize - 1];
+      // add approximate derivatives of first and last sample to features to allow continuity between chunks
+      fdl :=  -chunkList[i].srcData[0] + chunkList[i].srcData[1];
+      fdh :=  chunkList[i].srcData[chunkSize - 1] - chunkList[i].srcData[chunkSize - 2];
+
+      Line := Line + Format('0:%e 1:%e 2:%e 3:%e ', [sl * continuityFactor, sh * continuityFactor, fdl * continuityFactor, fdh * continuityFactor]);
 
       for j := 0 to chunkSizeUnMin div 2 - 1 do
       begin
         v1 := chunkList[i].fft[j].X;
         v2 := chunkList[i].fft[j].Y;
-        Line := Line + Format('%d:%.12g %d:%.12g ', [j * 2 + offset, v1, j * 2 + 1 + offset, v2]);
+        Line := Line + Format('%d:%e %d:%e ', [j * 2 + offset, v1, j * 2 + 1 + offset, v2]);
       end;
       Dataset.Add(Line);
     end;
@@ -610,12 +616,13 @@ begin
   SetLength(Result, Length(samples));
 end;
 
-function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
+function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; underSample: Integer; const samples: TDoubleDynArray
+  ): TDoubleDynArray;
 var
   l, h: TDoubleDynArray;
 begin
-  l := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True);
-  h := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False);
+  l := DoFilterCoeffs(fcl * underSample, transFactor * (exp(fcl) - 1.0), True);
+  h := DoFilterCoeffs(fch * underSample, transFactor * (exp(fch) - 1.0), False);
 
   Result := DoFilter(samples, l);
   Result := DoFilter(Result, h);
