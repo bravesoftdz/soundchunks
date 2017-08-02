@@ -8,7 +8,7 @@ const
   BandCount = 4;
   BandTransFactor = 0.1;
   LowCut = 30.0;
-  HighCut = 16000.0;
+  HighCut = 18000.0;
   BandDealiasSecondOrder = True; // otherwise first order
   BandBWeighting = True; // otherwise A-weighting
   OutputBitDepth = 8; // max 8Bits
