@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils;
 
-procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -126,7 +126,7 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 var
   i, Clu, Inp: Integer;
   Line, Output, ErrOut: String;
@@ -146,7 +146,7 @@ begin
     Process.Priority := ppIdle;
 
     i := 0;
-    internalRuncommand(Process, Output, ErrOut, i, True); // destroys Process
+    internalRuncommand(Process, Output, ErrOut, i, PrintProgress); // destroys Process
 
     DeleteFile(PChar(AFN));
 

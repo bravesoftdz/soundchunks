@@ -101,6 +101,7 @@ type
     minChunkSize: Integer;
     srcDataCount: Integer;
     projectedDataCount: Integer;
+    verbose: Boolean;
 
     srcHeader: array[$00..$2b] of Byte;
     srcData: TDoubleDynArray;
@@ -156,7 +157,14 @@ begin
   Delete(s, 1, p+Length(c)-1);
 end;
 
-
+function ParamStart(p: String): Integer;
+var i: Integer;
+begin
+  Result := -1;
+  for i := 1 to ParamCount do
+    if AnsiStartsStr(p, ParamStr(i)) then
+      Exit(i);
+end;
 
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
@@ -369,7 +377,7 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, '', desiredChunkCount, itc, False, XYC);
+  DoExternalKMeans(FN, '', desiredChunkCount, itc, encoder.verbose, False, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -895,6 +903,7 @@ begin
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
     enc.iterationCount := StrToIntDef(ParamStr(4), -10);
     enc.minChunkSize := StrToIntDef(ParamStr(5), 2);
+    enc.verbose := ParamStart('-v') <> -1;
 
     try
 
