@@ -13,7 +13,7 @@ const
   BandBWeighting = False; // otherwise A-weighting
 
 type
-  TDoubleDynArrayList = specialize TFPGList<TDoubleDynArray>;
+  TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
   TDoubleDynArray2 = array of TDoubleDynArray;
 
   TEncoder = class;
@@ -46,7 +46,7 @@ type
 
     index: Integer;
 
-    mixList: TDoubleDynArrayList;
+    mixList: TComplex1DArrayList;
 
     srcData: TDoubleDynArray;
     fft: TComplex1DArray;
@@ -145,6 +145,17 @@ var
 begin
   Result := CompareValue(v1, v2);
 end;
+
+function GetToken(var s : string; const c : string) : string;
+var
+  p: Integer;
+begin
+  p := Pos(c, s);
+  if p = 0 then p := Length(s);
+  Result := Copy(s, 1, p-1);
+  Delete(s, 1, p+Length(c)-1);
+end;
+
 
 
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
@@ -294,27 +305,18 @@ var
 
   procedure DoXYC(AIndex: Integer);
   var
-    i, First: Integer;
+    i: Integer;
     reducedChunk: TChunk;
   begin
-    First := -1;
-    for i := 0 to chunkList.Count - 1 do
-      if XYC[i] = AIndex then
-      begin
-        First := i;
-        Break;
-      end;
-
     reducedChunk := reducedChunks[AIndex];
     reducedChunk.InitMix;
 
-    if First <> -1 then
-      for i := 0 to chunkList.Count - 1 do
-        if XYC[i] = AIndex then
-        begin
-          reducedChunk.AddToMix(chunkList[i]);
-          chunkList[i].reducedChunk := reducedChunk;
-        end;
+    for i := 0 to chunkList.Count - 1 do
+      if XYC[i] = AIndex then
+      begin
+        reducedChunk.AddToMix(chunkList[i]);
+        chunkList[i].reducedChunk := reducedChunk;
+      end;
 
     reducedChunk.FinalizeMix;
   end;
@@ -323,11 +325,12 @@ var
   FN, Line: String;
   v1, v2, continuityFactor: Double;
   Dataset: TStringList;
-  i, j, offset, itc : Integer;
+  i, j, offset, itc: Integer;
+  chunk: TChunk;
 begin
   itc := encoder.iterationCount;
   if itc = 0 then Exit;
-  if itc < 0 then itc := -itc * encoder.bands[0].chunkCount div chunkCount;
+  if itc < 0 then itc := -itc * encoder.bands[BandCount - 1].chunkCount div chunkCount;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -360,11 +363,13 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, itc, False, XYC);
+  DoExternalKMeans(FN, '', desiredChunkCount, itc, False, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
-    reducedChunks.Add(TChunk.Create(encoder, Self, 0));
+    chunk := TChunk.Create(encoder, Self, 0);
+
+    reducedChunks.Add(chunk);
     DoXYC(i);
   end;
 end;
@@ -441,44 +446,41 @@ end;
 
 procedure TChunk.InitMix;
 begin
-  mixList := TDoubleDynArrayList.Create;
+  mixList := TComplex1DArrayList.Create;
 end;
 
 procedure TChunk.AddToMix(ch: TChunk);
 begin
-  mixList.Add(ch.srcData);
+  mixList.Add(ch.fft);
 end;
 
 procedure TChunk.FinalizeMix;
 var
   i, k: Integer;
-  mixOne: TDoubleDynArray;
+  acc: Complex;
 begin
   if not Assigned(mixList) or (mixList.Count = 0) then
     Exit;
 
-  if mixList.Count = 1 then
-  begin
-    srcData := Copy(mixList[0]);
-    Exit;
-  end;
-
-  SetLength(mixOne, mixList.Count);
+  SetLength(fft, band.chunkSize);
   for k := 0 to band.chunkSize - 1 do
   begin
-    for i := 0 to mixList.Count - 1 do
-      mixOne[i] := mixList[i][k];
+    acc.X := 0.0;
+    acc.Y := 0.0;
 
-{$if false}
-    anysort.AnySort(mixOne[0], Length(mixOne), Sizeof(Double), @CompareDouble);
-    if Odd(mixList.Count) then
-      srcData[k] := mixOne[mixList.Count div 2]
-    else
-      srcData[k] := 0.5 * (mixOne[mixList.Count div 2] + mixOne[mixList.Count div 2 - 1]);
-{$else}
-    srcData[k] := mean(mixOne);
-{$endif}
+    for i := 0 to mixList.Count - 1 do
+    begin
+      acc.X += mixList[i][k].X;
+      acc.Y += mixList[i][k].Y;
+    end;
+
+    acc.X /= mixList.Count;
+    acc.Y /= mixList.Count;
+
+    fft[k] := acc;
   end;
+
+  FFTR1DInv(fft, band.chunkSize, srcData);
 
   FreeAndNil(mixList);
 end;
@@ -884,7 +886,7 @@ begin
     enc := TEncoder.Create(ParamStr(1), ParamStr(2));
 
     enc.quality := EnsureRange(StrToFloatDef(ParamStr(3), 0.5), 0.001, 1.0);
-    enc.iterationCount := StrToIntDef(ParamStr(4), -100);
+    enc.iterationCount := StrToIntDef(ParamStr(4), -10);
     enc.minChunkSize := StrToIntDef(ParamStr(5), 2);
 
     try

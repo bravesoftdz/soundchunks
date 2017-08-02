@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -78,7 +78,7 @@ begin
               Inc(StderrBytesRead, StderrNumBytes);
           end
         else
-          Sleep(40);
+          Sleep(10);
       end;
 
     if PrintErr then
@@ -126,7 +126,7 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; Normalize: Boolean; var XYC: TIntegerDynArray);
 var
   i, Clu, Inp: Integer;
   Line, Output, ErrOut: String;
@@ -140,7 +140,8 @@ begin
   try
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'yakmo.exe';
-    Process.Parameters.Add('"' + AFN + '" - - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount) + IfThen(Normalize, ' -n'));
+    Process.Parameters.Add('"' + AFN + '" ' + IfThen(AOutCentroidsFN = '', '-', '"' + AOutCentroidsFN + '"') +
+      ' - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount) + IfThen(Normalize, ' -n'));
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
