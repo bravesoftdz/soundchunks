@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils, math;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -20,11 +20,11 @@ Const
 // We need to also collect stderr output in order to avoid
 // lock out if the stderr pipe is full.
 function internalRuncommand(p:TProcess;var outputstring:string;
-                            var stderrstring:string; var exitstatus:integer; PrintErr: Boolean):integer;
+                            var stderrstring:string; var exitstatus:integer; PrintOut: Boolean):integer;
 var
     numbytes,bytesread,available : integer;
     outputlength, stderrlength : integer;
-    stderrnumbytes,stderrbytesread, PrintErrLastPos, perp : integer;
+    stderrnumbytes,stderrbytesread, PrintLastPos, prp : integer;
 begin
   result:=-1;
   try
@@ -34,7 +34,7 @@ begin
     outputlength:=0;
     stderrbytesread:=0;
     stderrlength:=0;
-    PrintErrLastPos:=1;
+    PrintLastPos:=1;
     p.Execute;
     while p.Running do
       begin
@@ -51,6 +51,15 @@ begin
                 Setlength(outputstring,outputlength);
               end;
             NumBytes := p.Output.Read(outputstring[1+bytesread], available);
+
+            // output to screen
+            prp := Pos(#10, Copy(outputstring, PrintLastPos, bytesread - PrintLastPos + NumBytes));
+            if PrintOut and (prp <> 0) then
+            begin
+              Write(Copy(outputstring, PrintLastPos, prp));
+              PrintLastPos += prp;
+            end;
+
             if NumBytes > 0 then
               Inc(BytesRead, NumBytes);
           end
@@ -66,14 +75,6 @@ begin
               end;
             StderrNumBytes := p.StdErr.Read(stderrstring[1+StderrBytesRead], available);
 
-            // output stderr to screen
-            perp := Pos(#10, Copy(stderrstring, PrintErrLastPos, StderrBytesRead - PrintErrLastPos + stderrnumbytes));
-            if PrintErr and (perp <> 0) then
-            begin
-              Write(Copy(stderrstring, PrintErrLastPos, perp));
-              PrintErrLastPos += perp;
-            end;
-
             if StderrNumBytes > 0 then
               Inc(StderrBytesRead, StderrNumBytes);
           end
@@ -81,8 +82,8 @@ begin
           Sleep(10);
       end;
 
-    if PrintErr then
-      Write(Copy(stderrstring, PrintErrLastPos, StderrBytesRead - PrintErrLastPos));
+    if PrintOut then
+      Write(Copy(stderrstring, PrintLastPos, StderrBytesRead - PrintLastPos));
 
     // Get left output after end of execution
     available:=P.Output.NumBytesAvailable;
@@ -126,7 +127,7 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 var
   i, j, Clu, Inp, st: Integer;
   Line, Output, ErrOut: String;
@@ -145,7 +146,6 @@ begin
     for j := Shuffler.Count - 1 downto 0 do
       if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
         Shuffler.Delete(j);
-    Assert(Shuffler.Count = DesiredNbTiles);
     Shuffler.SaveToFile(AFN + '.cluster_centres');
 
     for i := 0 to RestartCount - 1 do
@@ -153,7 +153,7 @@ begin
       Process := TProcess.Create(nil);
       Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
       Process.Executable := 'omp_main.exe';
-      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t 0.0 -c "' + AFN + '.cluster_centres"');
+      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)) + ' -c "' + AFN + '.cluster_centres"');
       Process.ShowWindow := swoHIDE;
       Process.Priority := ppIdle;
 

@@ -101,7 +101,7 @@ type
     inputFN, outputFN: String;
 
     Quality: Double;
-    IterationCount: Integer;
+    Precision: Integer;
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
@@ -456,12 +456,11 @@ var
   FN, Line: String;
   v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
   Dataset: TStringList;
-  i, j, itc: Integer;
+  i, j, prec: Integer;
   chunk: TChunk;
 begin
-  itc := encoder.IterationCount;
-  if (itc = 0) or (desiredChunkCount = chunkCount) then Exit;
-  if itc < 0 then itc := min(250, -itc * encoder.bands[BandCount - 1].chunkCount div chunkCount);
+  prec := encoder.Precision;
+  if (prec = 0) or (desiredChunkCount = chunkCount) then Exit;
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
 
@@ -499,7 +498,7 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, itc, encoder.verbose, False, XYC);
+  DoExternalKMeans(FN, desiredChunkCount, 1, prec, encoder.verbose, False, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -787,13 +786,13 @@ begin
   outputFN := OutFN;
 
   Quality := 0.5;
-  IterationCount := 1;
+  Precision := 5;
   BandTransFactor := 0.1;
   LowCut := 30.0;
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
   BandBWeighting := True;
-  BandWeightingApplyCount := 2;
+  BandWeightingApplyCount := 1;
   OutputBitDepth := 8;
 end;
 
@@ -1067,7 +1066,7 @@ begin
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       WriteLn(#9'-q'#9'encoder quality (0.0-1.0); example: "-q0.2"');
-      WriteLn(#9'-it'#9'K-means iteration count; zero: "lossless" mode; negative: relative to band size');
+      WriteLn(#9'-pr'#9'K-means precision (0-9); 0: "lossless" mode');
       WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
@@ -1085,7 +1084,7 @@ begin
     enc := TEncoder.Create(ParamStr(1), ParamStr(2));
 
     enc.Quality :=  ParamValue('-q', enc.Quality);
-    enc.IterationCount := round(ParamValue('-it', enc.IterationCount));
+    enc.Precision := round(ParamValue('-pr', enc.Precision));
     enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
     enc.LowCut :=  ParamValue('-lc', enc.LowCut);
     enc.HighCut :=  ParamValue('-hc', enc.HighCut);
@@ -1096,7 +1095,7 @@ begin
     enc.verbose := ParamStart('-v') <> -1;
 
     WriteLn('Quality = ', FloatToStr(enc.Quality));
-    WriteLn('IterationCount = ', enc.IterationCount);
+    WriteLn('Precision = ', enc.Precision);
     WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
     WriteLn('LowCut = ', FloatToStr(enc.LowCut));
     WriteLn('HighCut = ', FloatToStr(enc.HighCut));
