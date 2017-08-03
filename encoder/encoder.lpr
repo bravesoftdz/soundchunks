@@ -1076,14 +1076,14 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
-      WriteLn(#9'-q'#9'encoder quality (0.0-1.0)');
+      WriteLn(#9'-q'#9'encoder quality (0.0-1.0); example: "-q0.2"');
       WriteLn(#9'-it'#9'K-means iteration count; zero: "lossless" mode; negative: relative to band size');
       WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
       WriteLn(#9'-bwa'#9'use A-weighting for bands (otherwise B-weighting)');
-      WriteLn(#9'-bwac'#9'band weighting apply count (0-inf)');
+      WriteLn(#9'-bwc'#9'band weighting apply count (0-inf)');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
       WriteLn(#9'-v'#9'verbose K-means');
       WriteLn;
@@ -1101,7 +1101,7 @@ begin
     enc.HighCut :=  ParamValue('-hc', enc.HighCut);
     enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
     enc.BandBWeighting :=  ParamStart('-bwa') = -1;
-    enc.BandWeightingApplyCount := round(ParamValue('-bwac', enc.BandWeightingApplyCount));
+    enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
     enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
     enc.verbose := ParamStart('-v') <> -1;
 
