@@ -171,7 +171,7 @@ end;
 
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 var
-  i, Clu, Inp: Integer;
+  i: Integer;
   Line, Output, ErrOut: String;
   OutSL: TStringList;
   Process: TProcess;

@@ -416,7 +416,7 @@ begin
     begin
       chunk := chunkList[i];
 
-      if (chunk.reducedChunk.dstData = nil) then
+      if not Assigned(chunk.reducedChunk.dstData) then
         chunk.reducedChunk.MakeDstData;
 
       for j := 0 to chunkSize - 1 do
@@ -518,7 +518,7 @@ begin
   hiSmp := 0;
   for i := 0 to band.chunkSize - 1 do
     hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
-  bitRange := EnsureRange(1 + ceil(log2(hiSmp)), OutputBitDepth, 16);
+  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), OutputBitDepth, 16);
 end;
 
 procedure TChunk.MakeDstData;
