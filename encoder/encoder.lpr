@@ -8,7 +8,6 @@ const
   BandCount = 4;
 
 type
-  TCompareFunction=function(Item1,Item2,UserParameter:Pointer):Integer;
   TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
   TDoubleDynArray2 = array of TDoubleDynArray;
 
@@ -62,7 +61,6 @@ type
     procedure MakeDstData;
   end;
 
-  PChunk = ^TChunk;
   TChunkList = specialize TFPGObjectList<TChunk>;
 
   { TBand }
@@ -90,7 +88,6 @@ type
     procedure Save(fn: String);
 
     procedure MakeChunks;
-    procedure MakeChunksUnique;
     procedure KMeansReduce;
     procedure MakeDstData;
   end;
@@ -155,16 +152,6 @@ type
 
 function IsDebuggerPresent () : LongBool stdcall; external 'kernel32.dll';
 
-function GetToken(var s : string; const c : string) : string;
-var
-  p: Integer;
-begin
-  p := Pos(c, s);
-  if p = 0 then p := Length(s);
-  Result := Copy(s, 1, p-1);
-  Delete(s, 1, p+Length(c)-1);
-end;
-
 function ParamStart(p: String): Integer;
 var i: Integer;
 begin
@@ -182,59 +169,6 @@ begin
   if idx < 0 then
     Exit(def);
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
-end;
-
-procedure QuickSort(var AData;AFirstItem,ALastItem,AItemSize:Integer;ACompareFunction:TCompareFunction;AUserParameter:Pointer=nil);
-var I, J, K, P: Integer;
-    PData,P1,P2:PByte;
-    Tmp:integer;
-begin
-  Assert((AItemSize and 3)=0,'AItemSize doit être multiple de 4 pour le moment');
-  PData:=PByte(@AData);
-  repeat
-    I := AFirstItem;
-    J := ALastItem;
-    P := (AFirstItem + ALastItem) shr 1;
-    repeat
-      P1:=PData;Inc(P1,I*AItemSize);
-      P2:=PData;Inc(P2,P*AItemSize);
-      while ACompareFunction(P1, P2, AUserParameter) < 0 do
-      begin
-        Inc(I);
-        Inc(P1,AItemSize);
-      end;
-      P1:=PData;Inc(P1,J*AItemSize);
-      //P2:=PData;Inc(P2,P*AItemSize); déjà fait avant
-      while ACompareFunction(P1, P2, AUserParameter) > 0 do
-      begin
-        Dec(J);
-        Dec(P1,AItemSize);
-      end;
-      if I <= J then
-      begin
-        // Swap 4 octets par 4 octets
-        P1:=PData;Inc(P1,I*AItemSize);
-        P2:=PData;Inc(P2,J*AItemSize);
-        for k:=1 to AItemSize shr 2 do
-        begin
-          Tmp:=PInteger(P2)^;
-          PInteger(P2)^:=PInteger(P1)^;
-          PInteger(P1)^:=Tmp;
-          Inc(P1,4);
-          Inc(P2,4);
-        end;
-
-        if P = I then
-          P := J
-        else if P = J then
-          P := I;
-        Inc(I);
-        Dec(J);
-      end;
-    until I > J;
-    if AFirstItem < J then QuickSort(AData,AFirstItem,J,AItemSize,ACompareFunction,AUserParameter);
-    AFirstItem := I;
-  until I >= ALastItem;
 end;
 
 
@@ -387,55 +321,6 @@ begin
   end;
 
   ProcThreadPool.DoParallelLocalProc(@DoChunk, 0, chunkCount - 1, nil);
-end;
-
-function CompareChunkDstData(Item1, Item2, UserParameter:Pointer):Integer;
-var
-  sz: Integer;
-  t1, t2: PChunk;
-begin
-  t1 := PChunk(Item1);
-  t2 := PChunk(Item2);
-  sz := IntPtr(UserParameter);
-  Result := CompareByte(t1^.dstData[0], t2^.dstData[0], sz);
-end;
-
-procedure TBand.MakeChunksUnique;
-var
-  i, firstSameIdx, removedCnt: Integer;
-  sortArr: array of TChunk;
-
-  procedure DoOneMerge;
-  var
-    j: Integer;
-  begin
-    if i - firstSameIdx >= 2 then
-      for j := firstSameIdx + 1 to i - 1 do
-      begin
-        sortArr[j].sameChunk := sortArr[firstSameIdx];
-        Inc(removedCnt);
-      end;
-    firstSameIdx := i;
-  end;
-
-begin
-  SetLength(sortArr, chunkCount);
-  for i := 0 to High(sortArr) do
-    sortArr[i] := chunkList[i];
-
-  QuickSort(sortArr[0], 0, High(sortArr), SizeOf(TChunk), @CompareChunkDstData, Pointer(chunkSize));
-
-  removedCnt := 0;
-  firstSameIdx := 0;
-  for i := 1 to High(sortArr) do
-    if CompareByte(sortArr[i - 1].dstData[0], sortArr[i].dstData[0], chunkSize) <> 0 then
-      DoOneMerge;
-
-  i := High(sortArr);
-  DoOneMerge;
-
-  uniqueChunkCount := chunkCount - removedCnt;
-  WriteLn('MakeChunksUnique #', index, ': ', chunkCount, ' -> ', uniqueChunkCount);
 end;
 
 procedure TBand.KMeansReduce;
