@@ -24,7 +24,8 @@ type
     smps, vs: TDoubleDynArray;
   public
     Ratio: Integer;
-    CorrectionFactor: Double;
+    CorrRatio1: Double;
+    CorrRatio2: Double;
     SecondOrder: Boolean;
 
     constructor Create(ARatio: Integer; ASecondOrder: Boolean);
@@ -240,7 +241,13 @@ end;
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
   SecondOrder := ASecondOrder;
-  CorrectionFactor := ifthen(SecondOrder, 3.0, 1.0);
+  CorrRatio1 := 0.82;
+  CorrRatio2 := -0.855;
+  if SecondOrder then
+  begin
+    CorrRatio1 *= 2.0;
+    CorrRatio2 *= 2.0;
+  end;
   Ratio := ARatio;
   R := max(1, ARatio);
   SetLength(vs, R);
@@ -353,22 +360,24 @@ var
   i: Integer;
   chunk: TChunk;
   cic: TSecondOrderCIC;
+  cicSmp: Double;
 begin
   WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
-  srcData := Copy(encoder.srcData);
+  srcData := encoder.DoBPFilter(fcl, fch, encoder.BandTransFactor, 1, encoder.srcData);
 
   // compensate for decoder altering the pass band
   cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
   try
     for i := -cic.Ratio + 1 to High(srcData) do
-      srcData[Max(0, i)] := encoder.srcData[Max(0, i)] * (cic.CorrectionFactor + 1) -
-        cic.CorrectionFactor * cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
+    begin
+      cicSmp := cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
+      if i >= 0 then
+        srcData[i] += srcData[i] * cic.CorrRatio1 + cicSmp * cic.CorrRatio2;
+    end;
   finally
     cic.Free;
   end;
-
-  srcData := encoder.DoBPFilter(fcl, fch, encoder.BandTransFactor, 1, srcData);
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
@@ -516,7 +525,7 @@ var
   smp: Double;
   cic: TSecondOrderCIC;
 begin
-  WriteLn('MakeDstData #', index);
+  //WriteLn('MakeDstData #', index);
 
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
@@ -787,7 +796,7 @@ begin
 
   Quality := 0.5;
   Precision := 5;
-  BandTransFactor := 0.1;
+  BandTransFactor := 0.05;
   LowCut := 30.0;
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
@@ -1082,45 +1091,39 @@ begin
     end;
 
     enc := TEncoder.Create(ParamStr(1), ParamStr(2));
-
-    enc.Quality :=  ParamValue('-q', enc.Quality);
-    enc.Precision := round(ParamValue('-pr', enc.Precision));
-    enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
-    enc.LowCut :=  ParamValue('-lc', enc.LowCut);
-    enc.HighCut :=  ParamValue('-hc', enc.HighCut);
-    enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
-    enc.BandBWeighting :=  ParamStart('-bwa') = -1;
-    enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
-    enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
-    enc.verbose := ParamStart('-v') <> -1;
-
-    WriteLn('Quality = ', FloatToStr(enc.Quality));
-    WriteLn('Precision = ', enc.Precision);
-    WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
-    WriteLn('LowCut = ', FloatToStr(enc.LowCut));
-    WriteLn('HighCut = ', FloatToStr(enc.HighCut));
-    WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
-    WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
-    WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
-    WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
-    WriteLn;
-
     try
+      enc.Quality :=  ParamValue('-q', enc.Quality);
+      enc.Precision := round(ParamValue('-pr', enc.Precision));
+      enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
+      enc.LowCut :=  ParamValue('-lc', enc.LowCut);
+      enc.HighCut :=  ParamValue('-hc', enc.HighCut);
+      enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
+      enc.BandBWeighting :=  ParamStart('-bwa') = -1;
+      enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
+      enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
+      enc.verbose := ParamStart('-v') <> -1;
+
+      WriteLn('Quality = ', FloatToStr(enc.Quality));
+      WriteLn('Precision = ', enc.Precision);
+      WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
+      WriteLn('LowCut = ', FloatToStr(enc.LowCut));
+      WriteLn('HighCut = ', FloatToStr(enc.HighCut));
+      WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
+      WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
+      WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
+      WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
+      WriteLn;
 
       enc.Load;
       enc.MakeBands;
       enc.MakeDstData;
       enc.Save;
 
+      DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, True, 2048);
+
     finally
       enc.Free;
     end;
-
-{$if false}
-    ShellExecute(0, 'open', PAnsiChar(ParamStr(2)), nil, nil, 0);
-{$else}
-    DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, False, 2048);
-{$endif}
 
     if IsDebuggerPresent then
       ReadLn;
