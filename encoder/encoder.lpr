@@ -803,7 +803,7 @@ begin
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
   BandBWeighting := True;
-  BandWeightingApplyCount := 3;
+  BandWeightingApplyCount := 2;
   OutputBitDepth := 8;
 end;
 
