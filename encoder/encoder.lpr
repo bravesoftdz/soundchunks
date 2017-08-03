@@ -154,14 +154,6 @@ type
 
 function IsDebuggerPresent () : LongBool stdcall; external 'kernel32.dll';
 
-function CompareDouble(const d1, d2): integer;
-var
-  v1 : Double absolute d1;
-  v2 : Double absolute d2;
-begin
-  Result := CompareValue(v1, v2);
-end;
-
 function GetToken(var s : string; const c : string) : string;
 var
   p: Integer;
@@ -437,7 +429,6 @@ begin
   WriteLn('MakeChunksUnique #', index, ': ', chunkCount, ' -> ', uniqueChunkCount);
 end;
 
-
 procedure TBand.KMeansReduce;
 var
   XYC: TIntegerDynArray;
@@ -465,11 +456,11 @@ var
   FN, Line: String;
   v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
   Dataset: TStringList;
-  i, j, offset, itc: Integer;
+  i, j, itc: Integer;
   chunk: TChunk;
 begin
   itc := encoder.IterationCount;
-  if itc = 0 then Exit;
+  if (itc = 0) or (desiredChunkCount = chunkCount) then Exit;
   if itc < 0 then itc := min(250, -itc * encoder.bands[BandCount - 1].chunkCount div chunkCount);
 
   WriteLn('KMeansReduce #', index, ' ', desiredChunkCount);
@@ -479,7 +470,6 @@ begin
   Dataset.LineBreak := #10;
 
   continuityFactor := chunkSize / chunkSizeUnMin;
-  offset := 4;
   try
     for i := 0 to chunkList.Count - 1 do
     begin
@@ -492,13 +482,13 @@ begin
       fdl :=  -chunkList[i].srcData[0] + chunkList[i].srcData[1];
       fdh :=  chunkList[i].srcData[chunkSize - 1] - chunkList[i].srcData[chunkSize - 2];
 
-      Line := Line + Format('0:%e 1:%e 2:%e 3:%e ', [sl * continuityFactor, sh * continuityFactor, fdl * continuityFactor, fdh * continuityFactor]);
+      Line := Line + Format('%0.8f %0.8f %0.8f %0.8f ', [sl * continuityFactor, sh * continuityFactor, fdl * continuityFactor, fdh * continuityFactor]);
 
       for j := 0 to chunkSizeUnMin div 2 - 1 do
       begin
         v1 := chunkList[i].fft[j].X;
         v2 := chunkList[i].fft[j].Y;
-        Line := Line + Format('%d:%e %d:%e ', [j * 2 + offset, v1, j * 2 + 1 + offset, v2]);
+        Line := Line + Format('%0.8f %0.8f ', [v1, v2]);
       end;
       Dataset.Add(Line);
     end;
@@ -509,7 +499,7 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, '', desiredChunkCount, itc, encoder.verbose, False, XYC);
+  DoExternalKMeans(FN, desiredChunkCount, itc, encoder.verbose, False, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -797,7 +787,7 @@ begin
   outputFN := OutFN;
 
   Quality := 0.5;
-  IterationCount := -10;
+  IterationCount := 1;
   BandTransFactor := 0.1;
   LowCut := 30.0;
   HighCut := 18000.0;

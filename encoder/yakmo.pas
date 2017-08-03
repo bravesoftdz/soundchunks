@@ -5,9 +5,9 @@ unit yakmo;
 interface
 
 uses
-  Classes, SysUtils, Types, Process, strutils;
+  Classes, SysUtils, Types, Process, strutils, math;
 
-procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -126,34 +126,46 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN, AOutCentroidsFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
 var
-  i, Clu, Inp: Integer;
+  i, j, Clu, Inp, st: Integer;
   Line, Output, ErrOut: String;
-  OutSL: TStringList;
+  OutSL, Shuffler: TStringList;
   Process: TProcess;
   OutputStream: TMemoryStream;
+  Ratio: Double;
 begin
-  Process := TProcess.Create(nil);
   OutSL := TStringList.Create;
+  Shuffler := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
-    Process.Executable := 'yakmo.exe';
-    Process.Parameters.Add('"' + AFN + '" ' + IfThen(AOutCentroidsFN = '', '-', '"' + AOutCentroidsFN + '"') +
-      ' - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount) + IfThen(Normalize, ' -n'));
-    Process.ShowWindow := swoHIDE;
-    Process.Priority := ppIdle;
+    // evenly spaced cluster init centroids
+    Shuffler.LoadFromFile(AFN);
+    Ratio := DesiredNbTiles / Shuffler.Count;
+    for j := Shuffler.Count - 1 downto 0 do
+      if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
+        Shuffler.Delete(j);
+    Assert(Shuffler.Count = DesiredNbTiles);
+    Shuffler.SaveToFile(AFN + '.cluster_centres');
 
-    i := 0;
-    internalRuncommand(Process, Output, ErrOut, i, PrintProgress); // destroys Process
+    for i := 0 to RestartCount - 1 do
+    begin
+      Process := TProcess.Create(nil);
+      Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
+      Process.Executable := 'omp_main.exe';
+      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t 0.0 -c "' + AFN + '.cluster_centres"');
+      Process.ShowWindow := swoHIDE;
+      Process.Priority := ppIdle;
+
+      st := 0;
+      internalRuncommand(Process, Output, ErrOut, st, PrintProgress); // destroys Process
+    end;
+
+    OutSL.LoadFromFile(AFN + '.membership');
 
     DeleteFile(PChar(AFN));
-
-    if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
-      OutSL.LineBreak := #10;
-
-    OutSL.Text := Output;
+    DeleteFile(PChar(AFN + '.membership'));
+    DeleteFile(PChar(AFN + '.cluster_centres'));
 
     for i := 0 to OutSL.Count - 1 do
     begin
@@ -164,6 +176,7 @@ begin
     end;
   finally
     OutputStream.Free;
+    Shuffler.Free;
     OutSL.Free;
   end;
 end;
