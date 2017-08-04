@@ -1,0 +1,4 @@
+[submodule "cub"]
+	path = cub
+	url = git@github.com:h2oai/cub.git
+	shallow = true
