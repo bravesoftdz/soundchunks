@@ -7,7 +7,7 @@ interface
 uses
   Classes, SysUtils, Types, Process, strutils, math;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, UseCUDA: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -127,7 +127,7 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, Normalize: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, UseCUDA: Boolean; var XYC: TIntegerDynArray);
 var
   i, j, Clu, Inp, st: Integer;
   Line, Output, ErrOut: String;
@@ -152,7 +152,7 @@ begin
     begin
       Process := TProcess.Create(nil);
       Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
-      Process.Executable := 'omp_main.exe';
+      Process.Executable := ifthen(UseCUDA, 'cuda_main.exe', 'omp_main.exe');
       Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)) + ' -c "' + AFN + '.cluster_centres"');
       Process.ShowWindow := swoHIDE;
       Process.Priority := ppIdle;

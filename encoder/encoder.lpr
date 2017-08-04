@@ -107,6 +107,7 @@ type
     BandBWeighting: Boolean; // otherwise A-weighting
     BandWeightingApplyCount: Integer;
     OutputBitDepth: Integer; // max 8Bits
+    UseCUDA: Boolean;
 
     sampleRate: Integer;
     minChunkSize: Integer;
@@ -392,7 +393,7 @@ begin
 
   SetLength(XYC, chunkList.Count);
   FillChar(XYC[0], chunkList.Count * SizeOF(Integer), $ff);
-  DoExternalKMeans(FN, desiredChunkCount, 1, prec, encoder.verbose, False, XYC);
+  DoExternalKMeans(FN, desiredChunkCount, 1, prec, encoder.verbose, encoder.UseCUDA, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -688,6 +689,7 @@ begin
   BandBWeighting := True;
   BandWeightingApplyCount := 1;
   OutputBitDepth := 8;
+  UseCUDA := False;
 end;
 
 destructor TEncoder.Destroy;
@@ -969,6 +971,7 @@ begin
       WriteLn(#9'-bwc'#9'band weighting apply count (0-inf)');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
       WriteLn(#9'-v'#9'verbose K-means');
+      WriteLn(#9'-cu'#9'use CUDA GPU K-means');
       WriteLn;
       Writeln('(source file must be 16bit mono WAV)');
       WriteLn;
@@ -987,6 +990,7 @@ begin
       enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.verbose := ParamStart('-v') <> -1;
+      enc.UseCUDA := ParamStart('-cu') <> -1;
 
       WriteLn('Quality = ', FloatToStr(enc.Quality));
       WriteLn('Precision = ', enc.Precision);
@@ -997,6 +1001,7 @@ begin
       WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
       WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
+      WriteLn('UseCUDA = ', enc.UseCUDA);
       WriteLn;
 
       enc.Load;
