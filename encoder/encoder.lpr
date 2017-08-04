@@ -377,7 +377,7 @@ begin
 
       Line := Line + Format('%0.8f %0.8f %0.8f %0.8f ', [sl * continuityFactor, sh * continuityFactor, fdl * continuityFactor, fdh * continuityFactor]);
 
-      for j := 0 to chunkSizeUnMin div 2 - 1 do
+      for j := 0 to chunkSizeUnMin - 1 do
       begin
         v1 := chunkList[i].fft[j].X;
         v2 := chunkList[i].fft[j].Y;
