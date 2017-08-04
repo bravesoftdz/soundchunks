@@ -352,7 +352,7 @@ float** kMeansHost(float **objects,      /* in: [numObjs][numCoords] */
         printf("WARNING: Your CUDA hardware has insufficient block shared memory. "
             "You need to recompile with BLOCK_SHARED_MEM_OPTIMIZATION=0. "
             "See the README for details.\n");
-        exit(-1);
+        exit(1);
     }
 
     const unsigned int numReductionThreads =
@@ -545,7 +545,7 @@ int kMeans(float *deviceObjects,      /* in: [numObjs][numCoords] */
         printf("WARNING: Your CUDA hardware has insufficient block shared memory. "
             "You need to recompile with BLOCK_SHARED_MEM_OPTIMIZATION=0. "
             "See the README for details.\n");
-        exit(-1);
+        exit(1);
     }
 
     const unsigned int numReductionThreads = nextPowerOfTwo(numClusterBlocks);
@@ -590,22 +590,19 @@ int kMeans(float *deviceObjects,      /* in: [numObjs][numCoords] */
             (numCoords, numObjs, numClusters,
              deviceObjects, deviceClusters, deviceMembership, deviceIntermediates);
 
-        //cudaDeviceSynchronize();
-        //CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         compute_delta <<< 1, numReductionThreads, reductionBlockSharedDataSize >>>
             (deviceIntermediates, numClusterBlocks, numReductionThreads);
 
-        //cudaDeviceSynchronize();
-        //CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         get_kernel_config(numCoords, numClusters, szGrid, szBlock, rowPerThread, colPerThread);
         
         update_cluster <<< szGrid, szBlock >>> (deviceObjects, deviceMembership
                     , deviceClusters, numCoords, numObjs, numClusters, rowPerThread, colPerThread);
         
-        cudaDeviceSynchronize();
-        // CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
         
         // inefficient memory transfer
         int d;

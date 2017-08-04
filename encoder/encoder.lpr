@@ -569,7 +569,6 @@ procedure TEncoder.MakeBands;
   begin
     bnd := bands[AIndex];
 
-    //bnd.MakeChunksUnique;
     bnd.KMeansReduce;
     bnd.MakeDstData;
     bnd.Save(ChangeFileExt(outputFN, '-' + IntToStr(AIndex) + '.wav'));
@@ -586,7 +585,15 @@ begin
   for i := 0 to BandCount - 1 do
     bands[i].MakeChunks;
 
-  ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
+  if UseCUDA then
+  begin
+    for i := 0 to BandCount - 1 do
+      DoBand(i, nil, nil);
+  end
+  else
+  begin
+    ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
+  end;
 end;
 
 
@@ -681,7 +688,7 @@ begin
   outputFN := OutFN;
 
   Quality := 0.5;
-  Precision := 5;
+  Precision := 6;
   BandTransFactor := 0.05;
   LowCut := 30.0;
   HighCut := 18000.0;

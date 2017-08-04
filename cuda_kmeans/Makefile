@@ -40,11 +40,11 @@
 all: cuda
 
 DFLAGS      =
-OPTFLAGS    = -O -NDEBUG
+OPTFLAGS    = -g
 OPTFLAGS    = -O4
 INCFLAGS    = -I.
 CFLAGS      = $(OPTFLAGS) $(DFLAGS) $(INCFLAGS) -DBLOCK_SHARED_MEM_OPTIMIZATION=0
-NVCCFLAGS   = $(CFLAGS) --ptxas-options=-v
+NVCCFLAGS   = $(CFLAGS) --ptxas-options=-v --default-stream=per-thread --use_fast_math --gpu-architecture=compute_50 --gpu-code=compute_50,sm_50,sm_52
 LDFLAGS     = $(OPTFLAGS)
 LIBS        =
 

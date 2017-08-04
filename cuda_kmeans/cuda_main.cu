@@ -58,6 +58,7 @@ static void usage(char *argv0, float threshold) {
     char *help =
         "Usage: %s [switches] -i filename -n num_clusters\n"
         "       -i filename    : file containing data to be clustered\n"
+        "       -c filename    : file containing init centroids\n"
         "       -b             : input file is in binary format (default no)\n"
         "       -n num_clusters: number of clusters (K must > 1)\n"
         "       -t threshold   : threshold value (default %.4f)\n"
@@ -92,6 +93,9 @@ int main(int argc, char **argv) {
     filename         = NULL;
     centFname        = NULL;
 
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
+    
     while ( (opt=getopt(argc,argv,"p:i:c:n:t:abdo"))!= EOF) {
         switch (opt) {
             case 'i': filename=optarg;
@@ -125,8 +129,12 @@ int main(int argc, char **argv) {
 
     if (centFname != 0)
     {
-      int dummy1, dummy2;
-      clusters = file_read(isBinaryFile, centFname, &dummy1, &dummy2);
+      int yc, xc;
+      clusters = file_read(isBinaryFile, centFname, &yc, &xc);
+      if (yc != numClusters || xc != numCoords)
+      {
+        printf("Cendroids mismatch: numCoords %d->%d numClusters %d->%d\n", numCoords, xc, numClusters, yc);
+      }
     }
     else
     {
@@ -160,8 +168,8 @@ int main(int argc, char **argv) {
 
     if (clusters != 0)
     {
-      for (int i = 0; i < numClusters; i++) {
-          for (int j = 0; j < numCoords; j++) {
+      for (int j = 0; j < numCoords; j++) {
+          for (int i = 0; i < numClusters; i++) {
               hostClusters[j * numClusters + i] = clusters[i][j];
           }
       }

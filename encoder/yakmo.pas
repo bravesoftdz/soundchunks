@@ -143,7 +143,7 @@ begin
     // evenly spaced cluster init centroids
     Shuffler.LoadFromFile(AFN);
     Ratio := DesiredNbTiles / Shuffler.Count;
-    for j := Shuffler.Count - 1 downto 0 do
+    for j := Shuffler.Count - 1 downto 1 do
       if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
         Shuffler.Delete(j);
     Shuffler.SaveToFile(AFN + '.cluster_centres');
