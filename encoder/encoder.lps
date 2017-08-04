@@ -8,9 +8,8 @@
       <Unit0>
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
-        <IsVisibleTab Value="True"/>
         <TopLine Value="685"/>
-        <CursorPos X="17" Y="691"/>
+        <CursorPos X="33" Y="695"/>
         <UsageCount Value="200"/>
         <Bookmarks Count="3">
           <Item0 X="18" Y="277" ID="3"/>
@@ -23,9 +22,10 @@
       <Unit1>
         <Filename Value="yakmo.pas"/>
         <IsPartOfProject Value="True"/>
+        <IsVisibleTab Value="True"/>
         <EditorIndex Value="1"/>
-        <TopLine Value="35"/>
-        <CursorPos X="39" Y="74"/>
+        <TopLine Value="121"/>
+        <CursorPos Y="161"/>
         <UsageCount Value="200"/>
         <Loaded Value="True"/>
         <DefaultSyntaxHighlighter Value="Delphi"/>
@@ -74,7 +74,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="109"/>
         <CursorPos X="4" Y="111"/>
-        <UsageCount Value="0"/>
+        <UsageCount Value="10"/>
         <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit7>
       <Unit8>
