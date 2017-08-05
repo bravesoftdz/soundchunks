@@ -108,7 +108,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn44.wav ..\out.wav -pr0"/>
+        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -pr0 -scr -bd1"/>
       </local>
     </RunParams>
     <Units Count="3">

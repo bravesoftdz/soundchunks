@@ -2,7 +2,7 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs;
 
 const
   BandCount = 4;
@@ -115,6 +115,9 @@ type
     projectedDataCount: Integer;
     verbose: Boolean;
 
+    CRSearch: Boolean;
+    CR1, CR2: Double;
+
     srcHeader: array[$00..$2b] of Byte;
     srcData: TDoubleDynArray;
     dstData: TSmallIntDynArray;
@@ -140,6 +143,8 @@ type
     procedure FindBestDesiredChunksCounts;
     procedure MakeBands;
     procedure MakeDstData;
+
+    procedure SearchBestCorrRatios;
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
@@ -176,12 +181,15 @@ end;
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
   SecondOrder := ASecondOrder;
-  CorrRatio1 := 0.82;
-  CorrRatio2 := -0.855;
   if SecondOrder then
   begin
-    CorrRatio1 *= 2.0;
-    CorrRatio2 *= 2.0;
+    CorrRatio1 := 1.949;
+    CorrRatio2 := 2.042;
+  end
+  else
+  begin
+    CorrRatio1 := 0.603;
+    CorrRatio2 := 0.709;
   end;
   Ratio := ARatio;
   R := max(1, ARatio);
@@ -267,7 +275,7 @@ var
   i: Integer;
   fs: TFileStream;
 begin
-  WriteLn('save #', index, ' ', fn);
+  WriteLn('Save #', index, ' ', fn);
 
   fs := TFileStream.Create(fn, fmCreate or fmShareDenyWrite);
   try
@@ -280,48 +288,49 @@ begin
 end;
 
 procedure TBand.MakeChunks;
-
-  procedure DoChunk(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  var
-    chunk: TChunk;
-  begin
-    chunk := chunkList[AIndex];
-
-    chunk.ComputeFFT;
-    chunk.MakeDstData;
-  end;
-
 var
   i: Integer;
   chunk: TChunk;
   cic: TSecondOrderCIC;
   cicSmp: Double;
 begin
-  WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
+  if not encoder.CRSearch then
+    WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
   srcData := encoder.DoBPFilter(fcl, fch, encoder.BandTransFactor, 1, encoder.srcData);
 
-  // compensate for decoder altering the pass band
-  cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
-  try
-    for i := -cic.Ratio + 1 to High(srcData) do
+  if underSample > 1 then
+  begin
+    // compensate for decoder altering the pass band
+    cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
+
+    if encoder.CRSearch then
     begin
-      cicSmp := cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
-      if i >= 0 then
-        srcData[i] += srcData[i] * cic.CorrRatio1 + cicSmp * cic.CorrRatio2;
+      cic.CorrRatio1 := encoder.CR1;
+      cic.CorrRatio2 := encoder.CR2;
     end;
-  finally
-    cic.Free;
+
+    try
+      for i := -cic.Ratio + 1 to High(srcData) do
+      begin
+        cicSmp := cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
+        if i >= 0 then
+          srcData[i] += srcData[i] * cic.CorrRatio1 - cicSmp * cic.CorrRatio2;
+      end;
+    finally
+      cic.Free;
+    end;
   end;
 
   chunkList.Capacity := chunkCount;
   for i := 0 to chunkCount - 1 do
   begin
     chunk := TChunk.Create(encoder, Self, i);
+    if not encoder.CRSearch then
+      chunk.ComputeFFT;
+    chunk.MakeDstData;
     chunkList.Add(chunk);
   end;
-
-  ProcThreadPool.DoParallelLocalProc(@DoChunk, 0, chunkCount - 1, nil);
 end;
 
 procedure TBand.KMeansReduce;
@@ -416,8 +425,17 @@ begin
   SetLength(dstData, Length(srcData));
   FillQWord(dstData[0], Length(srcData), 0);
 
-  cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
-  pos := -cic.Ratio + 1;
+  if underSample > 1 then
+  begin
+    cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
+    pos := -cic.Ratio + 1;
+  end
+  else
+  begin
+    cic := nil;
+    pos := 0;
+  end;
+
   try
     for i := 0 to chunkList.Count - 1 do
     begin
@@ -428,17 +446,22 @@ begin
         smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], encoder.OutputBitDepth, chunk.reducedChunk.dstBitShift);
         for k := 0 to underSample - 1 do
         begin
-          dstData[max(0, pos)] := cic.ProcessSample(Smp);
+          if Assigned(cic) then
+            dstData[max(0, pos)] := cic.ProcessSample(Smp)
+          else
+            dstData[pos] := Smp;
+
           pos := min(High(dstData), pos + 1);
         end;
       end;
     end;
 
-    for k := 0 to underSample - 1 do
-    begin
-      dstData[pos] := cic.ProcessSample(0);
-      pos := min(High(dstData), pos + 1);
-    end;
+    if Assigned(cic) then
+      for k := 0 to underSample - 1 do
+      begin
+        dstData[pos] := cic.ProcessSample(0);
+        pos := min(High(dstData), pos + 1);
+      end;
   finally
     cic.Free;
   end;
@@ -569,9 +592,22 @@ procedure TEncoder.MakeBands;
   begin
     bnd := bands[AIndex];
 
-    bnd.KMeansReduce;
+    if not CRSearch then
+      bnd.KMeansReduce;
+
     bnd.MakeDstData;
-    bnd.Save(ChangeFileExt(outputFN, '-' + IntToStr(AIndex) + '.wav'));
+
+    if not CRSearch then
+      bnd.Save(ChangeFileExt(outputFN, '-' + IntToStr(AIndex) + '.wav'));
+  end;
+
+  procedure DoBandChunks(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  var
+    bnd: TBand;
+  begin
+    bnd := bands[AIndex];
+
+    bnd.MakeChunks;
   end;
 
 var
@@ -582,8 +618,7 @@ begin
 
   FindBestDesiredChunksCounts;
 
-  for i := 0 to BandCount - 1 do
-    bands[i].MakeChunks;
+  ProcThreadPool.DoParallelLocalProc(@DoBandChunks, 0, BandCount - 1, nil);
 
   if UseCUDA then
   begin
@@ -601,7 +636,8 @@ procedure TEncoder.Save;
 var
   fs: TFileStream;
 begin
-  WriteLn('Save ', outputFN);
+  if not CRSearch then
+    WriteLn('Save ', outputFN);
 
   fs := TFileStream.Create(outputFN, fmCreate or fmShareDenyWrite);
   try
@@ -655,7 +691,8 @@ begin
 
   projectedDataCount := allSz;
 
-  WriteLn('projectedDataCount = ', projectedDataCount);
+  if not CRSearch then
+    WriteLn('projectedDataCount = ', projectedDataCount);
 end;
 
 function TEncoder.DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
@@ -688,7 +725,7 @@ begin
   outputFN := OutFN;
 
   Quality := 0.5;
-  Precision := 4;
+  Precision := 5;
   BandTransFactor := 0.05;
   LowCut := 30.0;
   HighCut := 18000.0;
@@ -714,7 +751,7 @@ var
   i, j: Integer;
   acc: Double;
 begin
-  WriteLn('MakeDstData');
+  //WriteLn('MakeDstData');
 
   SetLength(dstData, Length(srcData));
   FillWord(dstData[0], Length(srcData), 0);
@@ -725,6 +762,69 @@ begin
       acc += bands[j].dstData[i];
     dstData[i] := make16BitSample(acc);
   end;
+end;
+
+procedure TEncoder.SearchBestCorrRatios;
+
+  function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
+  begin
+    CR1 := ACR1;
+    CR2 := ACR2;
+
+    MakeBands;
+    MakeDstData;
+    Save;
+
+    Result := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, True, 2048);
+
+    if Verbose then
+      Write(#13, FloatToStr(CR1), #9, FloatToStr(CR2), #9, FloatToStr(Result), '                ');
+  end;
+
+var
+  N : AlglibInteger;
+  M : AlglibInteger;
+  State : MinLBFGSState;
+  Rep : MinLBFGSReport;
+  S : TReal1DArray;
+  H : Double;
+begin
+  CRSearch := True;
+
+  H := 0.01;
+  N := 2;
+  M := 1;
+  SetLength(S, 2);
+  S[0] := 1.0 + Ord(BandDealiasSecondOrder);
+  S[1] := S[0];
+  MinLBFGSCreate(N, M, S, State);
+  MinLBFGSSetCond(State, Double(0.0), Double(0.0), Double(0.001), 0);
+  while MinLBFGSIteration(State) do
+  begin
+    if State.NeedFG then
+    begin
+      State.F := DoOne(State.X[0], State.X[1], True);
+
+      State.G[0] := (
+          -DoOne(State.X[0] + 2 * H, State.X[1], False) +
+          8 * DoOne(State.X[0] + H, State.X[1], False) +
+          -8 * DoOne(State.X[0] - H, State.X[1], False) +
+          DoOne(State.X[0] - 2 * H, State.X[1], False)
+        ) / (12 * H);
+
+      State.G[1] := (
+          -DoOne(State.X[0], State.X[1] + 2 * H, False) +
+          8 * DoOne(State.X[0], State.X[1] + H, False) +
+          -8 * DoOne(State.X[0], State.X[1] - H, False) +
+          DoOne(State.X[0], State.X[1] - 2 * H, False)
+        ) / (12 * H);
+    end;
+  end;
+  MinLBFGSResults(State, S, Rep);
+
+  WriteLn;
+  WriteLn('Best: ');
+  DoOne(S[0], S[1], True);
 end;
 
 function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
@@ -1008,7 +1108,7 @@ begin
       WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
       WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
-      WriteLn('UseCUDA = ', enc.UseCUDA);
+      WriteLn('UseCUDA = ', BoolToStr(enc.UseCUDA, True));
       WriteLn;
 
       enc.Load;
@@ -1017,6 +1117,9 @@ begin
       enc.Save;
 
       DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, True, 2048);
+
+      if ParamStart('-scr') <> -1 then
+        enc.SearchBestCorrRatios;
 
     finally
       enc.Free;
