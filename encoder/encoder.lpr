@@ -688,7 +688,7 @@ begin
   outputFN := OutFN;
 
   Quality := 0.5;
-  Precision := 6;
+  Precision := 4;
   BandTransFactor := 0.05;
   LowCut := 30.0;
   HighCut := 18000.0;
