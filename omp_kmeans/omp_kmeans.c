@@ -135,7 +135,7 @@ int omp_kmeans(int     is_perform_atomic, /* in: */
         }
     }
 
-    if (_debug) timing = omp_get_wtime();
+    timing = omp_get_wtime();
     do {
         delta = 0.0;
 
@@ -218,12 +218,12 @@ int omp_kmeans(int     is_perform_atomic, /* in: */
         }
             
         delta /= numObjs;
+        
+        printf("iteration %2d, delta = %f, threshold = %f\n", loop, delta, threshold);
     } while (delta > threshold && loop++ < 500);
 
-    if (_debug) {
-        timing = omp_get_wtime() - timing;
-        printf("nloops = %2d (T = %7.4f)",loop,timing);
-    }
+    timing = omp_get_wtime() - timing;
+    printf("nloops = %2d (T = %7.4f)\n",loop,timing);
 
     if (!is_perform_atomic) {
         free(local_newClusterSize[0]);
