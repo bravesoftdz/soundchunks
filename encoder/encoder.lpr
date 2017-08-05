@@ -7,8 +7,8 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 const
   BandCount = 4;
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
-    (0.51651, 0.47541),
-    (2.05853, 2.26151)
+    (0.51906, 0.47768),
+    (1.92567, 2.08441)
   );
 
 type
@@ -614,15 +614,8 @@ begin
 
   ProcThreadPool.DoParallelLocalProc(@DoBandChunks, 0, BandCount - 1, nil);
 
-  if UseCUDA then
-  begin
-    for i := 0 to BandCount - 1 do
-      DoBand(i, nil, nil);
-  end
-  else
-  begin
-    ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
-  end;
+  for i := 0 to BandCount - 1 do
+    DoBand(i, nil, nil);
 end;
 
 
@@ -769,7 +762,7 @@ end;
 procedure TEncoder.SearchBestCorrRatios;
 
 var
-  srcf, dstf: TDoubleDynArray;
+  dstf: TDoubleDynArray;
 
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
   var
@@ -785,7 +778,7 @@ var
     for i := 0 to srcDataCount - 1 do
       dstf[i] := makeFloatSample(dstData[i]);
 
-    Result := CompareDCT(0, srcDataCount - 1, False, srcf, dstf);
+    Result := CompareDCT(0, srcDataCount - 1, False, srcData, dstf);
 
     if Verbose then
     begin
@@ -802,7 +795,6 @@ var
   S : TReal1DArray;
   H : Double;
 begin
-  srcf := DoBPFilter(bands[0].fcl, bands[BandCount - 1].fch, BandTransFactor, srcData);
   SetLength(dstf, srcDataCount);
 
   CRSearch := True;
