@@ -6,6 +6,10 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 
 const
   BandCount = 4;
+  CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
+    (0.51651, 0.47541),
+    (2.05853, 2.26151)
+  );
 
 type
   TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
@@ -23,8 +27,6 @@ type
     smps, vs: TDoubleDynArray;
   public
     Ratio: Integer;
-    CorrRatio1: Double;
-    CorrRatio2: Double;
     SecondOrder: Boolean;
 
     constructor Create(ARatio: Integer; ASecondOrder: Boolean);
@@ -148,7 +150,7 @@ type
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
-    function DoBPFilter(fcl, fch, transFactor: Double; underSample: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
     function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
@@ -181,16 +183,6 @@ end;
 constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
   SecondOrder := ASecondOrder;
-  if SecondOrder then
-  begin
-    CorrRatio1 := 1.949;
-    CorrRatio2 := 2.042;
-  end
-  else
-  begin
-    CorrRatio1 := 0.603;
-    CorrRatio2 := 0.709;
-  end;
   Ratio := ARatio;
   R := max(1, ARatio);
   SetLength(vs, R);
@@ -292,22 +284,24 @@ var
   i: Integer;
   chunk: TChunk;
   cic: TSecondOrderCIC;
-  cicSmp: Double;
+  cicSmp, cr1, cr2: Double;
 begin
   if not encoder.CRSearch then
     WriteLn('MakeChunks #', index, ' (', round(fcl * encoder.sampleRate), ' Hz .. ', round(fch * encoder.sampleRate), ' Hz); ', chunkSize, ' * (', chunkCount, ' -> ', desiredChunkCount,'); ', underSample);
 
-  srcData := encoder.DoBPFilter(fcl, fch, encoder.BandTransFactor, 1, encoder.srcData);
+  srcData := encoder.DoBPFilter(fcl, fch, encoder.BandTransFactor, encoder.srcData);
 
   if underSample > 1 then
   begin
     // compensate for decoder altering the pass band
     cic := TSecondOrderCIC.Create(underSample * 2, encoder.BandDealiasSecondOrder);
 
+    cr1 := CICCorrRatio[encoder.BandDealiasSecondOrder, 0];
+    cr2 := CICCorrRatio[encoder.BandDealiasSecondOrder, 1];
     if encoder.CRSearch then
     begin
-      cic.CorrRatio1 := encoder.CR1;
-      cic.CorrRatio2 := encoder.CR2;
+      cr1 := encoder.CR1;
+      cr2 := encoder.CR2;
     end;
 
     try
@@ -315,7 +309,7 @@ begin
       begin
         cicSmp := cic.ProcessSample(srcData[Min(High(srcData), i + cic.Ratio - 1)]);
         if i >= 0 then
-          srcData[i] += srcData[i] * cic.CorrRatio1 - cicSmp * cic.CorrRatio2;
+          srcData[i] += srcData[i] * cr1 - cicSmp * cr2;
       end;
     finally
       cic.Free;
@@ -707,16 +701,24 @@ begin
   SetLength(Result, Length(samples));
 end;
 
-function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; underSample: Integer; const samples: TDoubleDynArray
+function TEncoder.DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray
   ): TDoubleDynArray;
 var
-  l, h: TDoubleDynArray;
+  coeffs: TDoubleDynArray;
 begin
-  l := DoFilterCoeffs(fcl * underSample, transFactor * (exp(fcl) - 1.0), True);
-  h := DoFilterCoeffs(fch * underSample, transFactor * (exp(fch) - 1.0), False);
+  Result := samples;
 
-  Result := DoFilter(samples, l);
-  Result := DoFilter(Result, h);
+  if fcl > 0.0 then
+  begin
+    coeffs := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True);
+    Result := DoFilter(Result, coeffs);
+  end;
+
+  if fch < 0.5 then
+  begin
+    coeffs := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False);
+    Result := DoFilter(Result, coeffs);
+  end;
 end;
 
 constructor TEncoder.Create(InFN, OutFN: String);
@@ -766,39 +768,53 @@ end;
 
 procedure TEncoder.SearchBestCorrRatios;
 
+var
+  srcf, dstf: TDoubleDynArray;
+
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
+  var
+    i: Integer;
+    eaq: Double;
   begin
     CR1 := ACR1;
     CR2 := ACR2;
 
     MakeBands;
     MakeDstData;
-    Save;
 
-    Result := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, True, 2048);
+    for i := 0 to srcDataCount - 1 do
+      dstf[i] := makeFloatSample(dstData[i]);
+
+    Result := CompareDCT(0, srcDataCount - 1, False, srcf, dstf);
 
     if Verbose then
-      Write(#13, FloatToStr(CR1), #9, FloatToStr(CR2), #9, FloatToStr(Result), '                ');
+    begin
+      Save;
+      eaq := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
+      Write(#13'(', FormatFloat('0.00000', CR1), ', ', FormatFloat('0.00000', CR2), ')'#9, FormatFloat('0.00000', Result),#9, FloatToStr(eaq), '                ');
+    end;
   end;
 
 var
   N : AlglibInteger;
-  M : AlglibInteger;
   State : MinLBFGSState;
   Rep : MinLBFGSReport;
   S : TReal1DArray;
   H : Double;
 begin
+  srcf := DoBPFilter(bands[0].fcl, bands[BandCount - 1].fch, BandTransFactor, srcData);
+  SetLength(dstf, srcDataCount);
+
   CRSearch := True;
 
-  H := 0.01;
+  H := 1e-3;
   N := 2;
-  M := 1;
   SetLength(S, 2);
-  S[0] := 1.0 + Ord(BandDealiasSecondOrder);
+  S[0] := 1.0 + 2.0 * Ord(BandDealiasSecondOrder);
   S[1] := S[0];
-  MinLBFGSCreate(N, M, S, State);
-  MinLBFGSSetCond(State, Double(0.0), Double(0.0), Double(0.001), 0);
+  MinLBFGSCreate(N, N, S, State);
+  MinLBFGSSetCond(State, H, 0.0, 0.0, 0);
+  MinLBFGSSetStpMax(State, 0.1);
   while MinLBFGSIteration(State) do
   begin
     if State.NeedFG then
