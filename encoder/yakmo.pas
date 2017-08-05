@@ -140,24 +140,22 @@ begin
   Shuffler := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    if not UseCUDA then
-    begin
-      // evenly spaced cluster init centroids
-      Shuffler.LoadFromFile(AFN);
-      Ratio := DesiredNbTiles / Shuffler.Count;
-      for j := Shuffler.Count - 1 downto 1 do
-        if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
-          Shuffler.Delete(j);
-      Shuffler.SaveToFile(AFN + '.cluster_centres');
-    end;
+    // evenly spaced cluster init centroids
+    Shuffler.LoadFromFile(AFN);
+    Ratio := DesiredNbTiles / Shuffler.Count;
+    for j := Shuffler.Count - 1 downto 1 do
+      if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
+        Shuffler.Delete(j);
+    Shuffler.SaveToFile(AFN + '.cluster_centres');
 
     for i := 0 to RestartCount - 1 do
     begin
       Process := TProcess.Create(nil);
       Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
       Process.Executable := ifthen(UseCUDA, 'cuda_main.exe', 'omp_main.exe');
-      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)) +
-          ifthen((i > 0) or not UseCUDA, ' -c "' + AFN + '.cluster_centres"'));
+      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) +
+          ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)) +
+          ' -c "' + AFN + '.cluster_centres"');
       Process.ShowWindow := swoHIDE;
       Process.Priority := ppIdle;
 

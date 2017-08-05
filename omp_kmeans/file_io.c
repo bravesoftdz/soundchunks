@@ -25,7 +25,6 @@
 #include <fcntl.h>
 #include <unistd.h>     /* read(), close() */
 #include <errno.h>
-extern int errno;
 
 #include "kmeans.h"
 

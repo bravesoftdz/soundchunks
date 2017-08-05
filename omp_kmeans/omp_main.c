@@ -96,6 +96,9 @@ int main(int argc, char **argv) {
     var_name          = NULL;
     center_filename   = NULL;
 
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
+    
     while ( (opt=getopt(argc,argv,"p:i:n:t:c:v:abdohq"))!= EOF) {
         switch (opt) {
             case 'i': filename=optarg;
