@@ -7,8 +7,8 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 const
   BandCount = 4;
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
-    (0.51906, 0.47768),
-    (1.92567, 2.08441)
+    (0.71584, 0.82718),
+    (1.815, 1.815)
   );
 
 type
@@ -608,7 +608,10 @@ var
   i: Integer;
 begin
   for i := 0 to BandCount - 1 do
+  begin
+    FreeAndNil(bands[i]);
     bands[i] := TBand.Create(Self, i);
+  end;
 
   FindBestDesiredChunksCounts;
 
@@ -761,31 +764,18 @@ end;
 
 procedure TEncoder.SearchBestCorrRatios;
 
-var
-  dstf: TDoubleDynArray;
-
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
-  var
-    i: Integer;
-    eaq: Double;
   begin
     CR1 := ACR1;
-    CR2 := ACR2;
+    CR2 := ACR1;
 
     MakeBands;
     MakeDstData;
-
-    for i := 0 to srcDataCount - 1 do
-      dstf[i] := makeFloatSample(dstData[i]);
-
-    Result := CompareDCT(0, srcDataCount - 1, False, srcData, dstf);
+    Save;
+    Result := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
 
     if Verbose then
-    begin
-      Save;
-      eaq := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
-      Write(#13'(', FormatFloat('0.00000', CR1), ', ', FormatFloat('0.00000', CR2), ')'#9, FormatFloat('0.00000', Result),#9, FloatToStr(eaq), '                ');
-    end;
+      Write(#13'(', FormatFloat('0.00000', CR1), ', ', FormatFloat('0.00000', CR2), ')'#9, FormatFloat('0.00000', Result), '                ');
   end;
 
 var
@@ -795,37 +785,46 @@ var
   S : TReal1DArray;
   H : Double;
 begin
-  SetLength(dstf, srcDataCount);
-
   CRSearch := True;
 
-  H := 1e-3;
-  N := 2;
-  SetLength(S, 2);
-  S[0] := 1.0 + 2.0 * Ord(BandDealiasSecondOrder);
-  S[1] := S[0];
+  H := ifthen(BandDealiasSecondOrder, 1e-4, 1e-5);
+  N := 1;
+  SetLength(S, N);
+  S[0] := ifthen(BandDealiasSecondOrder, 1.8, 0.75);
   MinLBFGSCreate(N, N, S, State);
   MinLBFGSSetCond(State, H, 0.0, 0.0, 0);
-  MinLBFGSSetStpMax(State, 0.1);
+  //MinLBFGSSetStpMax(State, 0.1);
   while MinLBFGSIteration(State) do
   begin
     if State.NeedFG then
     begin
-      State.F := DoOne(State.X[0], State.X[1], True);
+      State.F := DoOne(State.X[0], State.X[0], True);
 
+{$if false}
       State.G[0] := (
           -DoOne(State.X[0] + 2 * H, State.X[1], False) +
           8 * DoOne(State.X[0] + H, State.X[1], False) +
           -8 * DoOne(State.X[0] - H, State.X[1], False) +
           DoOne(State.X[0] - 2 * H, State.X[1], False)
         ) / (12 * H);
-
-      State.G[1] := (
-          -DoOne(State.X[0], State.X[1] + 2 * H, False) +
-          8 * DoOne(State.X[0], State.X[1] + H, False) +
-          -8 * DoOne(State.X[0], State.X[1] - H, False) +
-          DoOne(State.X[0], State.X[1] - 2 * H, False)
-        ) / (12 * H);
+//
+//      State.G[1] := (
+//          -DoOne(State.X[0], State.X[1] + 2 * H, False) +
+//          8 * DoOne(State.X[0], State.X[1] + H, False) +
+//          -8 * DoOne(State.X[0], State.X[1] - H, False) +
+//          DoOne(State.X[0], State.X[1] - 2 * H, False)
+//        ) / (12 * H);
+{$else}
+      State.G[0] := (
+          DoOne(State.X[0] + H, State.X[1], False) -
+          DoOne(State.X[0] - H, State.X[1], False)
+        ) / (2 * H);
+//
+//      State.G[1] := (
+//          DoOne(State.X[0], State.X[1] + H, False) -
+//          DoOne(State.X[0], State.X[1] - H, False)
+//        ) / (2 * H);
+{$endif}
     end;
   end;
   MinLBFGSResults(State, S, Rep);
