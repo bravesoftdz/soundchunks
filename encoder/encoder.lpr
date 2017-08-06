@@ -7,7 +7,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 const
   BandCount = 4;
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
-    (0.71584, 0.82718),
+    (0.503, 0.816),
     (1.815, 1.815)
   );
 
@@ -109,10 +109,10 @@ type
     BandBWeighting: Boolean; // otherwise A-weighting
     BandWeightingApplyCount: Integer;
     OutputBitDepth: Integer; // max 8Bits
+    MinChunkSize: Integer;
     UseCUDA: Boolean;
 
     sampleRate: Integer;
-    minChunkSize: Integer;
     srcDataCount: Integer;
     projectedDataCount: Integer;
     verbose: Boolean;
@@ -722,15 +722,16 @@ begin
   inputFN := InFN;
   outputFN := OutFN;
 
-  Quality := 0.5;
+  Quality := 0.25;
   Precision := 5;
   BandTransFactor := 0.05;
-  LowCut := 30.0;
-  HighCut := 18000.0;
+  LowCut := 32.0;
+  HighCut := 16000.0;
   BandDealiasSecondOrder := True;
   BandBWeighting := True;
-  BandWeightingApplyCount := 1;
+  BandWeightingApplyCount := 2;
   OutputBitDepth := 8;
+  MinChunkSize := 16;
   UseCUDA := False;
 end;
 
@@ -766,7 +767,7 @@ procedure TEncoder.SearchBestCorrRatios;
 
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
   begin
-    CR1 := ACR1;
+    CR1 := CICCorrRatio[BandDealiasSecondOrder, 0];
     CR2 := ACR1;
 
     MakeBands;
@@ -787,13 +788,12 @@ var
 begin
   CRSearch := True;
 
-  H := ifthen(BandDealiasSecondOrder, 1e-4, 1e-5);
+  H := ifthen(BandDealiasSecondOrder, 1e-4, 1e-4);
   N := 1;
   SetLength(S, N);
-  S[0] := ifthen(BandDealiasSecondOrder, 1.8, 0.75);
+  S[0] := ifthen(BandDealiasSecondOrder, 1.8, 0.5);
   MinLBFGSCreate(N, N, S, State);
   MinLBFGSSetCond(State, H, 0.0, 0.0, 0);
-  //MinLBFGSSetStpMax(State, 0.1);
   while MinLBFGSIteration(State) do
   begin
     if State.NeedFG then
@@ -807,23 +807,11 @@ begin
           -8 * DoOne(State.X[0] - H, State.X[1], False) +
           DoOne(State.X[0] - 2 * H, State.X[1], False)
         ) / (12 * H);
-//
-//      State.G[1] := (
-//          -DoOne(State.X[0], State.X[1] + 2 * H, False) +
-//          8 * DoOne(State.X[0], State.X[1] + H, False) +
-//          -8 * DoOne(State.X[0], State.X[1] - H, False) +
-//          DoOne(State.X[0], State.X[1] - 2 * H, False)
-//        ) / (12 * H);
 {$else}
       State.G[0] := (
           DoOne(State.X[0] + H, State.X[1], False) -
           DoOne(State.X[0] - H, State.X[1], False)
         ) / (2 * H);
-//
-//      State.G[1] := (
-//          DoOne(State.X[0], State.X[1] + H, False) -
-//          DoOne(State.X[0], State.X[1] - H, False)
-//        ) / (2 * H);
 {$endif}
     end;
   end;
@@ -1077,13 +1065,14 @@ begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       WriteLn(#9'-q'#9'encoder quality (0.0-1.0); example: "-q0.2"');
       WriteLn(#9'-pr'#9'K-means precision (0-9); 0: "lossless" mode');
-      WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
+      WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
       WriteLn(#9'-bwa'#9'use A-weighting for bands (otherwise B-weighting)');
       WriteLn(#9'-bwc'#9'band weighting apply count (0-inf)');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
+      WriteLn(#9'-mcs'#9'minimum chunk size');
       WriteLn(#9'-v'#9'verbose K-means');
       WriteLn(#9'-cu'#9'use CUDA GPU K-means');
       WriteLn;
@@ -1096,25 +1085,27 @@ begin
     try
       enc.Quality :=  ParamValue('-q', enc.Quality);
       enc.Precision := round(ParamValue('-pr', enc.Precision));
-      enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
       enc.LowCut :=  ParamValue('-lc', enc.LowCut);
       enc.HighCut :=  ParamValue('-hc', enc.HighCut);
+      enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
       enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
       enc.BandBWeighting :=  ParamStart('-bwa') = -1;
       enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
+      enc.MinChunkSize :=  round(ParamValue('-mcs', enc.MinChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
       enc.UseCUDA := ParamStart('-cu') <> -1;
 
       WriteLn('Quality = ', FloatToStr(enc.Quality));
       WriteLn('Precision = ', enc.Precision);
-      WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
+      WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
       WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
       WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
       WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
+      WriteLn('MinChunkSize = ', enc.MinChunkSize);
       WriteLn('UseCUDA = ', BoolToStr(enc.UseCUDA, True));
       WriteLn;
 
@@ -1123,7 +1114,7 @@ begin
       enc.MakeDstData;
       enc.Save;
 
-      DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, True, 2048);
+      //DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, True, 2048);
 
       if ParamStart('-scr') <> -1 then
         enc.SearchBestCorrRatios;
