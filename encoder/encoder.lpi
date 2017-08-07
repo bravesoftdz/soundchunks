@@ -108,7 +108,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -pr0 -scr -bd1"/>
+        <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out2.wav"/>
       </local>
     </RunParams>
     <Units Count="3">
@@ -151,13 +151,15 @@
         <StackChecks Value="True"/>
       </Checks>
       <VerifyObjMethodCallValidity Value="True"/>
+      <Optimizations>
+        <OptimizationLevel Value="0"/>
+      </Optimizations>
     </CodeGeneration>
     <Linking>
       <Debugging>
         <DebugInfoType Value="dsDwarf2"/>
         <UseHeaptrc Value="True"/>
         <TrashVariables Value="True"/>
-        <UseExternalDbgSyms Value="True"/>
       </Debugging>
     </Linking>
     <Other>
