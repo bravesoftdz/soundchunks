@@ -108,7 +108,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out2.wav"/>
+        <CommandLineParams Value="..\opus_test\mo_10_32.wav ..\out2.wav -cu -v"/>
       </local>
     </RunParams>
     <Units Count="3">
