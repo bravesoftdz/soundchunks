@@ -46,6 +46,7 @@
           <Linking>
             <Debugging>
               <GenerateDebugInfo Value="False"/>
+              <UseExternalDbgSyms Value="True"/>
             </Debugging>
             <LinkSmart Value="True"/>
           </Linking>
@@ -108,7 +109,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\opus_test\mo_10_32.wav ..\out2.wav -cu -v"/>
+        <CommandLineParams Value="..\my_test\loading32.wav ..\out3.wav -v -br128 -bwc0"/>
       </local>
     </RunParams>
     <Units Count="3">
