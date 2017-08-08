@@ -15,7 +15,7 @@ data = np.delete(data, 0, 1)
 
 #data = preprocessing.normalize(data, norm = 'max', axis = 0);
 
-clus = cluster.KMeans(n_clusters = args.n, n_init = 20, verbose = args.d, tol = args.t, random_state = 42, precompute_distances = True, copy_x = False, algorithm = 'full')
+clus = cluster.KMeans(n_clusters = args.n, verbose = args.d, tol = args.t, random_state = 42, precompute_distances = True, copy_x = False, algorithm = 'full')
 #clus = cluster.Birch(n_clusters = args.n, threshold = 0.2, branching_factor = 25)
 #clus = cluster.AgglomerativeClustering(n_clusters = args.n)
 

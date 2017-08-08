@@ -23,9 +23,11 @@ type
   TBandGlobalData = record
     fcl, fch: Double;
     weight: Double;
+
     underSample, underSampleUnMin: Integer;
     chunkSize, chunkSizeUnMin: Integer;
     chunkCount: Integer;
+
     filteredData: TDoubleDynArray;
     dstData: TSmallIntDynArray;
   end;
@@ -56,8 +58,6 @@ type
     reducedChunk, sameChunk: TChunk;
 
     index: Integer;
-    bitRange: Integer;
-    dstBitShift: Integer;
     tmpIndex: Integer;
 
     mixList: TComplex1DArrayList;
@@ -73,7 +73,6 @@ type
     procedure InitMix;
     procedure AddToMix(afft: TComplex1DArray);
     procedure FinalizeMix(IntoDstData: Boolean);
-    procedure ComputeBitRange;
     procedure MakeDstData;
   end;
 
@@ -89,6 +88,9 @@ type
     rmsPower: Double;
     desiredChunkCount: Integer;
 
+    bitRange: Integer;
+    dstBitShift: Integer;
+
     srcData: PDouble;
     dstData: TDoubleDynArray;
 
@@ -98,6 +100,8 @@ type
 
     constructor Create(frm: TFrame; idx: Integer; startSample, endSample: Integer);
     destructor Destroy; override;
+
+    procedure ComputeBitRange;
 
     procedure MakeChunks;
 
@@ -281,7 +285,7 @@ begin
   begin
     s := '#' + IntToStr(index) + #9;
     for i := 0 to BandCount - 1 do
-      s := s + IntToStr(bands[i].desiredChunkCount) + #9 + FormatFloat('0.00', bands[i].rmsPower) + #9;
+      s := s + IntToStr(bands[i].desiredChunkCount) + ', ' + FormatFloat('0.0', bands[i].rmsPower) + ', ' + IntToStr(bands[i].bitRange) + #9;
     WriteLn(s);;
   end;
 end;
@@ -353,6 +357,8 @@ begin
   rmsPower := sqrt(rmsPower / (endSample - startSample + 1)) - 1.0 / Low(SmallInt);
   rmsPower := 20.0 * log10(rmsPower);
 
+  ComputeBitRange;
+
   chunks := TChunkList.Create;
   reducedChunks := TChunkList.Create;
 end;
@@ -363,6 +369,18 @@ begin
   reducedChunks.Free;
 
   inherited Destroy;
+end;
+
+procedure TBand.ComputeBitRange;
+var
+  i, hiSmp: Integer;
+begin
+  hiSmp := 0;
+  for i := 0 to frame.encoder.frameSampleCount - 1 do
+    hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
+  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), frame.encoder.OutputBitDepth, 16);
+
+  dstBitShift := bitRange - frame.encoder.OutputBitDepth;
 end;
 
 procedure TBand.MakeChunks;
@@ -476,7 +494,7 @@ begin
 
     for j := 0 to globalData^.chunkSize - 1 do
     begin
-      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.OutputBitDepth, chunk.dstBitShift);
+      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.OutputBitDepth, dstBitShift);
       for k := 0 to globalData^.underSample - 1 do
       begin
         if InRange(pos, 0, High(dstData)) then
@@ -632,25 +650,13 @@ begin
   end;
 end;
 
-procedure TChunk.ComputeBitRange;
-var
-  i, hiSmp: Integer;
-begin
-  hiSmp := 0;
-  for i := 0 to band.globalData^.chunkSize - 1 do
-    hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
-  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), band.frame.encoder.OutputBitDepth, 16);
-end;
-
 procedure TChunk.MakeDstData;
 var
   i: Integer;
 begin
-  ComputeBitRange;
-  dstBitShift := bitRange - band.frame.encoder.OutputBitDepth;
   SetLength(dstData, band.globalData^.chunkSize);
   for i := 0 to band.globalData^.chunkSize - 1 do
-    dstData[i] := TEncoder.makeOutputSample(srcData[i], band.frame.encoder.OutputBitDepth, dstBitShift);
+    dstData[i] := TEncoder.makeOutputSample(srcData[i], band.frame.encoder.OutputBitDepth, band.dstBitShift);
 end;
 
 { TEncoder }
