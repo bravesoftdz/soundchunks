@@ -116,7 +116,8 @@ type
     encoder: TEncoder;
 
     index: Integer;
-    sampleCount: Integer;
+    SampleCount: Integer;
+    FrameSize: Integer;
 
     bands: array[0..BandCount - 1] of TBand;
 
@@ -145,12 +146,12 @@ type
     BandWeightingApplyPower: Double;
     OutputBitDepth: Integer; // max 8Bits
     MinChunkSize: Integer;
-    ChunksPerFrame: Integer;
+    MaxFrameSize: Integer;
     UsePython: Boolean;
 
-    sampleRate: Integer;
-    sampleCount: Integer;
-    frameByteSize, projectedByteSize, frameCount, frameSampleCount: Integer;
+    SampleRate: Integer;
+    SampleCount: Integer;
+    projectedByteSize, frameCount, frameSampleCount: Integer;
     verbose: Boolean;
 
     CRSearch: Boolean;
@@ -230,7 +231,7 @@ begin
   encoder := enc;
   index := idx;
 
-  sampleCount := encoder.frameSampleCount;
+  SampleCount := encoder.frameSampleCount;
 
   for i := 0 to BandCount - 1 do
     bands[i] := TBand.Create(Self, i, startSample, endSample);
@@ -249,11 +250,12 @@ end;
 
 procedure TFrame.FindBandDesiredChunkCount;
 var
-  i, allCC: Integer;
+  i, allSz: Integer;
   sz, dbh: Double;
-  full: Boolean;
+  full, compressed: Boolean;
   bnd: TBand;
   s: String;
+  dcc: array[0..BandCount - 1] of Integer;
 begin
 
   dbh := -MaxDouble;
@@ -263,27 +265,32 @@ begin
 
   sz := 1;
   repeat
+    FrameSize := allSz;
+    for i := 0 to BandCount - 1 do
+      bands[i].desiredChunkCount := dcc[i];
+
     full := True;
-    allCC := 0;
+    allSz := 0;
     for i := 0 to BandCount - 1 do
     begin
       bnd := bands[i];
 
-      bnd.desiredChunkCount := round(sz * bnd.globalData^.weight * max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb));
+      dcc[i] := round(sz * bnd.globalData^.weight * max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb));
+      dcc[i] := EnsureRange(dcc[i], 1, bnd.globalData^.chunkCount);
 
-      bnd.desiredChunkCount := max(1, bnd.desiredChunkCount);
-      bnd.desiredChunkCount := min(bnd.globalData^.chunkCount, bnd.desiredChunkCount);
+      compressed := dcc[i] < bnd.globalData^.chunkCount;
+      full := full and not compressed;
 
-      full := full and (bnd.desiredChunkCount = bnd.globalData^.chunkCount);
-
-      allCC += bnd.desiredChunkCount * bands[i].globalData^.chunkSize div encoder.MinChunkSize;
+      allSz += dcc[i] * bnd.globalData^.chunkSize + Ord(compressed) * bnd.globalData^.chunkCount + SizeOf(Byte);
     end;
     sz += 0.1;
-  until (allCC >= encoder.ChunksPerFrame) or full;
+
+  until (allSz > encoder.MaxFrameSize) or full;
+
 
   if encoder.verbose then
   begin
-    s := '#' + IntToStr(index) + #9;
+    s := '#' + IntToStr(index) + ', ' + IntToStr(FrameSize) + #9;
     for i := 0 to BandCount - 1 do
       s := s + IntToStr(bands[i].desiredChunkCount) + ', ' + FormatFloat('0.0', bands[i].rmsPower) + ', ' + IntToStr(bands[i].bitRange) + #9;
     WriteLn(s);;
@@ -482,8 +489,8 @@ var
 begin
   //WriteLn('MakeDstData #', index);
 
-  SetLength(dstData, frame.sampleCount);
-  FillQWord(dstData[0], frame.sampleCount, 0);
+  SetLength(dstData, frame.SampleCount);
+  FillQWord(dstData[0], frame.SampleCount, 0);
 
   pos := 0;
   for i := 0 to chunks.Count - 1 do
@@ -525,7 +532,7 @@ begin
     n := 0;
     for k := 0 to band.globalData^.underSample - 1 do
     begin
-      if pos + k >= band.frame.sampleCount then
+      if pos + k >= band.frame.SampleCount then
         Break;
       acc += band.srcData[pos + k];
       Inc(n);
@@ -670,18 +677,18 @@ begin
   fs := TFileStream.Create(inputFN, fmOpenRead or fmShareDenyNone);
   try
     fs.ReadBuffer(srcHeader[0], SizeOf(srcHeader));
-    sampleCount := (fs.Size - fs.Position) div SizeOf(SmallInt);
-    SetLength(srcData, sampleCount);
-    FillWord(srcData[0], sampleCount, 0);
-    for i := 0 to sampleCount - 1 do
+    SampleCount := (fs.Size - fs.Position) div SizeOf(SmallInt);
+    SetLength(srcData, SampleCount);
+    FillWord(srcData[0], SampleCount, 0);
+    for i := 0 to SampleCount - 1 do
       srcData[i] := SmallInt(fs.ReadWord);
   finally
     fs.Free;
   end;
 
-  sampleRate := PInteger(@srcHeader[$18])^;
-  writeln('sampleRate = ', sampleRate);
-  WriteLn('srcDataCount = ', sampleCount);
+  SampleRate := PInteger(@srcHeader[$18])^;
+  writeln('SampleRate = ', SampleRate);
+  WriteLn('SampleCount = ', SampleCount);
 end;
 
 procedure TEncoder.SaveWAV;
@@ -697,7 +704,7 @@ begin
   fs := TFileStream.Create(wavFN, fmCreate or fmShareDenyWrite);
   try
     fs.WriteBuffer(srcHeader[0], SizeOf(srcHeader));
-    fs.WriteBuffer(dstData[0], sampleCount * 2);
+    fs.WriteBuffer(dstData[0], SampleCount * 2);
   finally
     fs.Free;
   end;
@@ -743,85 +750,85 @@ begin
 end;
 
 procedure TEncoder.SaveStream(AStream: TStream);
-const
-  CacheSize = 256;
-var
-  blockSize, blockCount: Integer;
-  chunksPerBlock: array[0 .. BandCount - 1] of Integer;
-  cache: array[0 .. CacheSize - 1, 0..2] of Integer;
-  blockCacheIdxs: array[0 .. BandCount - 1, 0 .. CacheSize - 1] of Integer;
-
-  function IsCacheIdxUsed(idx: Integer): Boolean;
-  var
-    i, j: Integer;
-  begin
-    Result := idx = 0; // cache idx #0 doesn't exist (play command)
-    for i := 0 to BandCount - 1 do
-      for j := 0 to chunksPerBlock[i] - 1 do
-        if blockCacheIdxs[i, j] = idx then
-          Exit(True);
-  end;
-
-  function AllocCacheIdx(chunk: TChunk): Integer;
-  var
-    i, ratio, lru: Integer;
-  begin
-    ratio := chunk.band.globalData^.chunkSize div MinChunkSize;
-
-{$if false}
-    repeat
-      Result := random(CacheSize div ratio) * ratio;
-    until not IsCacheIdxUsed(Result); // don't use a cache index that is needed for this block
-{$else}
-    Result := CacheSize - 1;
-    lru := MaxInt;
-    for i := 0 to CacheSize div ratio - 1 do
-      if cache[i * ratio, 2] < lru then
-      begin
-        Result := i * ratio;
-        lru := cache[Result, 2];
-      end;
-{$endif}
-
-    Assert(not IsCacheIdxUsed(Result));
-
-    cache[Result, 0] := chunk.band.index;
-    cache[Result, 1] := chunk.index;
-    for i := 1 to ratio - 1 do
-    begin
-      cache[Result + i, 0] := -chunk.band.index;
-      cache[Result + i, 1] := -chunk.index;
-    end;
-
-    //AStream.WriteWord($aa55);
-    AStream.WriteByte(Result);
-    AStream.Write(chunk.dstData[0], chunk.band.globalData^.chunkSize);
-  end;
-
-  function GetOrAllocCacheIdx(chunk: TChunk; lru: Integer): Integer;
-  var
-    i: Integer;
-  begin
-    Result := -1;
-    for i := 0 to CacheSize - 1 do
-      if (cache[i, 0] = chunk.band.index) and (cache[i, 1] = chunk.index) then
-      begin
-        Result := i;
-        Break;
-      end;
-
-    if Result < 0 then
-      Result := AllocCacheIdx(chunk);
-
-    cache[Result, 2] := lru;
-  end;
-
+//const
+//  CacheSize = 256;
+//var
+//  blockSize, blockCount: Integer;
+//  chunksPerBlock: array[0 .. BandCount - 1] of Integer;
+//  cache: array[0 .. CacheSize - 1, 0..2] of Integer;
+//  blockCacheIdxs: array[0 .. BandCount - 1, 0 .. CacheSize - 1] of Integer;
+//
+//  function IsCacheIdxUsed(idx: Integer): Boolean;
+//  var
+//    i, j: Integer;
+//  begin
+//    Result := idx = 0; // cache idx #0 doesn't exist (play command)
+//    for i := 0 to BandCount - 1 do
+//      for j := 0 to chunksPerBlock[i] - 1 do
+//        if blockCacheIdxs[i, j] = idx then
+//          Exit(True);
+//  end;
+//
+//  function AllocCacheIdx(chunk: TChunk): Integer;
+//  var
+//    i, ratio, lru: Integer;
+//  begin
+//    ratio := chunk.band.globalData^.chunkSize div MinChunkSize;
+//
+//{$if false}
+//    repeat
+//      Result := random(CacheSize div ratio) * ratio;
+//    until not IsCacheIdxUsed(Result); // don't use a cache index that is needed for this block
+//{$else}
+//    Result := CacheSize - 1;
+//    lru := MaxInt;
+//    for i := 0 to CacheSize div ratio - 1 do
+//      if cache[i * ratio, 2] < lru then
+//      begin
+//        Result := i * ratio;
+//        lru := cache[Result, 2];
+//      end;
+//{$endif}
+//
+//    Assert(not IsCacheIdxUsed(Result));
+//
+//    cache[Result, 0] := chunk.band.index;
+//    cache[Result, 1] := chunk.index;
+//    for i := 1 to ratio - 1 do
+//    begin
+//      cache[Result + i, 0] := -chunk.band.index;
+//      cache[Result + i, 1] := -chunk.index;
+//    end;
+//
+//    //AStream.WriteWord($aa55);
+//    AStream.WriteByte(Result);
+//    AStream.Write(chunk.dstData[0], chunk.band.globalData^.chunkSize);
+//  end;
+//
+//  function GetOrAllocCacheIdx(chunk: TChunk; lru: Integer): Integer;
+//  var
+//    i: Integer;
+//  begin
+//    Result := -1;
+//    for i := 0 to CacheSize - 1 do
+//      if (cache[i, 0] = chunk.band.index) and (cache[i, 1] = chunk.index) then
+//      begin
+//        Result := i;
+//        Break;
+//      end;
+//
+//    if Result < 0 then
+//      Result := AllocCacheIdx(chunk);
+//
+//    cache[Result, 2] := lru;
+//  end;
+//
 //var
 //  i, j, k: Integer;
   //pp: Integer;
 begin
   //blockSize := bands[0].chunkSize * bands[0].underSample;
-  //blockCount := (sampleCount - 1) div blockSize + 1;
+  //blockCount := (SampleCount - 1) div blockSize + 1;
   //
   //for i := 0 to BandCount - 1 do
   //  chunksPerBlock[i] := blockSize div (bands[i].chunkSize * bands[i].underSample);
@@ -857,7 +864,7 @@ begin
   fs := TFileStream.Create(fn, fmCreate or fmShareDenyWrite);
   try
     fs.WriteBuffer(srcHeader[0], SizeOf(srcHeader));
-    fs.WriteBuffer(bandData[index].dstData[0], sampleCount * 2);
+    fs.WriteBuffer(bandData[index].dstData[0], SampleCount * 2);
   finally
     fs.Free;
   end;
@@ -875,17 +882,17 @@ begin
 
     // determing low and high bandpass frequencies
 
-    hc := min(HighCut, sampleRate / 2);
+    hc := min(HighCut, SampleRate / 2);
     ratioP := log2(LowCut / hc) / BandCount + 0.5;
-    ratioL := hc / sampleRate;
+    ratioL := hc / SampleRate;
 
     if i = 0 then
-      bnd.fcl := LowCut / sampleRate
+      bnd.fcl := LowCut / SampleRate
     else
       bnd.fcl := power(2.0, (BandCount - i) * ratioP) * ratioL;
 
     if i = BandCount - 1 then
-      bnd.fch := hc / sampleRate
+      bnd.fch := hc / SampleRate
     else
       bnd.fch := power(2.0, (BandCount - 1 - i) * ratioP) * ratioL;
 
@@ -917,15 +924,15 @@ var
 begin
   bnd := bandData[AIndex];
 
-  SetLength(bnd.filteredData, sampleCount);
-  for j := 0 to sampleCount - 1 do
+  SetLength(bnd.filteredData, SampleCount);
+  for j := 0 to SampleCount - 1 do
     bnd.filteredData[j] := makeFloatSample(srcData[j]);
 
   // band pass the samples
   bnd.filteredData := DoBPFilter(bnd.fcl, bnd.fch, BandTransFactor, bnd.filteredData);
   SetLength(bnd.filteredData, frameSampleCount * frameCount);
 
-  for j := sampleCount to frameSampleCount * frameCount - 1 do
+  for j := SampleCount to frameSampleCount * frameCount - 1 do
     bnd.filteredData[j] := 0;
 
   if bnd.underSample > 1 then
@@ -968,7 +975,7 @@ begin
 
     bnd.chunkCount := (frameSampleCount - 1) div (bnd.chunkSize * bnd.underSample) + 1;
 
-    fsq := bnd.fcl * bnd.fch * sampleRate * sampleRate;
+    fsq := bnd.fcl * bnd.fch * SampleRate * SampleRate;
 
     if BandBWeighting then
       // B-weighting
@@ -1015,38 +1022,36 @@ begin
   for i := 0 to BandCount - 1 do
     blockChunkCount += blockSampleCount div (bandData[i].underSample * bandData[i].chunkSize);
 
-  blockCount := (sampleCount - 1) div blockSampleCount + 1;
+  blockCount := (SampleCount - 1) div blockSampleCount + 1;
 
   // pass 1
-  frameByteSize := ChunksPerFrame * MinChunkSize;
-  projectedByteSize := ceil((sampleCount / sampleRate) * BitRate * (1024 / 8));
-  frameCount :=  (projectedByteSize - blockCount * blockChunkCount - 1) div frameByteSize + 1;
-  frameSampleCount := (sampleCount - 1) div frameCount + 1;
+  projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
+  frameCount :=  (projectedByteSize - 1) div MaxFrameSize + 1;
+  frameSampleCount := (SampleCount - 1) div frameCount + 1;
   frameSampleCount := ((frameSampleCount - 1) div blockSampleCount + 1) * blockSampleCount;
 
   // pass 2
-  frameByteSize += frameSampleCount div blockSampleCount * blockChunkCount;
-  projectedByteSize := frameByteSize * frameCount;
+  projectedByteSize := MaxFrameSize * frameCount;
 
   MakeBandGlobalData2;
 
   if verbose then
   begin
-    writeln('frameByteSize = ', frameByteSize);
-    writeln('frameCount = ', frameCount);
-    writeln('frameSampleCount = ', frameSampleCount);
-    writeln('projectedByteSize = ', projectedByteSize);
+    writeln('MaxFrameSize = ', MaxFrameSize);
+    writeln('FrameCount = ', frameCount);
+    writeln('FrameSampleCount = ', frameSampleCount);
+    writeln('ProjectedByteSize = ', projectedByteSize);
   end;
 
   for i := 0 to BandCount - 1 do
-     WriteLn('Band #', i, ' (', round(bandData[i].fcl * sampleRate), ' Hz .. ', round(bandData[i].fch * sampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
+     WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
 
   ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
 
   for i := 0 to frameCount - 1 do
   begin
     curStart := i * frameSampleCount;
-    curEnd := min(sampleCount, (i + 1) * frameSampleCount) - 1;
+    curEnd := min(SampleCount, (i + 1) * frameSampleCount) - 1;
 
     frm := TFrame.Create(Self, i, curStart, curEnd);
     frames.Add(frm);
@@ -1103,7 +1108,7 @@ begin
   BandWeightingApplyPower := 0.0;
   OutputBitDepth := 8;
   MinChunkSize := 16;
-  ChunksPerFrame:= 256;
+  MaxFrameSize:= 7168;
   UsePython := False;
 
   frames := TFrameList.Create;
@@ -1148,7 +1153,7 @@ begin
   pos := 0;
   try
     for k := 0 to frames.Count - 1 do
-      for i := 0 to frames[k].sampleCount - 1 do
+      for i := 0 to frames[k].SampleCount - 1 do
       begin
         for j := 0 to BandCount - 1 do
         begin
@@ -1240,7 +1245,7 @@ begin
   N := ceil(4.6 / transFactor);
   if (N mod 2) = 0 then N += 1;
 
-  //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(sampleRate * fc), ' ', N);
+  //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(SampleRate * fc), ' ', N);
 
   SetLength(Result, N);
   sum := 0;
