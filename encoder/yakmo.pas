@@ -5,9 +5,12 @@ unit yakmo;
 interface
 
 uses
-  Classes, SysUtils, Types, Process, strutils, math;
+  Windows, Classes, SysUtils, Types, Process, strutils, math;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, UseCUDA: Boolean; var XYC: TIntegerDynArray);
+type
+  TDoubleDynArray2 = array of TDoubleDynArray;
+
+procedure DoExternalKMeans(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
@@ -127,59 +130,71 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(AFN: String; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress, UseCUDA: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
 var
   i, j, Clu, Inp, st: Integer;
-  Line, Output, ErrOut: String;
-  OutSL, Shuffler: TStringList;
+  InFN, Line, Output, ErrOut: String;
+  SL, Shuffler: TStringList;
   Process: TProcess;
   OutputStream: TMemoryStream;
   Ratio: Double;
+  pythonExe: array[0..MAX_PATH-1] of Char;
 begin
-  OutSL := TStringList.Create;
+  SL := TStringList.Create;
   Shuffler := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    // evenly spaced cluster init centroids
-    Shuffler.LoadFromFile(AFN);
-    Ratio := DesiredNbTiles / Shuffler.Count;
-    for j := Shuffler.Count - 1 downto 1 do
-      if trunc(j * Ratio) = trunc((j + 1) * Ratio) then
-        Shuffler.Delete(j);
-    Shuffler.SaveToFile(AFN + '.cluster_centres');
-
-    for i := 0 to RestartCount - 1 do
+    for i := 0 to High(XY) do
     begin
-      Process := TProcess.Create(nil);
-      Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
-      Process.Executable := ifthen(UseCUDA, 'cuda_main.exe', 'omp_main.exe');
-      Process.Parameters.Add('-i "' + AFN + '" -n ' + IntToStr(DesiredNbTiles) +
-          ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)) +
-          ' -c "' + AFN + '.cluster_centres"');
-      Process.ShowWindow := swoHIDE;
-      Process.Priority := ppIdle;
-
-      st := 0;
-      internalRuncommand(Process, Output, ErrOut, st, PrintProgress); // destroys Process
+      Line := IntToStr(i) + ' ';
+      for j := 0 to High(XY[0]) do
+        Line := Line + FloatToStr(XY[i, j]) + ' ';
+      SL.Add(Line);
     end;
 
-    OutSL.LoadFromFile(AFN + '.membership');
+    InFN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
+    SL.SaveToFile(InFN);
+    SL.Clear;
 
-    DeleteFile(PChar(AFN));
-    DeleteFile(PChar(AFN + '.membership'));
-    DeleteFile(PChar(AFN + '.cluster_centres'));
+    Process := TProcess.Create(nil);
+    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
 
-    for i := 0 to OutSL.Count - 1 do
+    if SearchPath(nil, 'python.exe', nil, MAX_PATH, pythonExe, nil) = 0 then
+      pythonExe := 'python.exe';
+    Process.Executable := pythonExe;
+
+    for i := 0 to GetEnvironmentVariableCount - 1 do
+      Process.Environment.Add(GetEnvironmentString(i));
+    Process.Environment.Add('MKL_NUM_THREADS=1');
+    Process.Environment.Add('NUMEXPR_NUM_THREADS=1');
+    Process.Environment.Add('OMP_NUM_THREADS=1');
+
+    Process.Parameters.Add('cluster.py');
+    Process.Parameters.Add('-i "' + InFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)));
+    if PrintProgress then
+      Process.Parameters.Add('-d');
+    Process.ShowWindow := swoHIDE;
+    Process.Priority := ppIdle;
+
+    st := 0;
+    internalRuncommand(Process, Output, ErrOut, st, PrintProgress); // destroys Process
+
+    SL.LoadFromFile(InFN + '.membership');
+
+    DeleteFile(PChar(InFN));
+    DeleteFile(PChar(InFN + '.membership'));
+    DeleteFile(PChar(InFN + '.cluster_centres'));
+
+    SetLength(XYC, SL.Count);
+    for i := 0 to SL.Count - 1 do
     begin
-      Line := OutSL[i];
-      if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
-          TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
-        XYC[Inp] := Clu;
+      Line := SL[i];
+      XYC[i] := StrToIntDef(Line, -1);
     end;
   finally
     OutputStream.Free;
     Shuffler.Free;
-    OutSL.Free;
+    SL.Free;
   end;
 end;
 

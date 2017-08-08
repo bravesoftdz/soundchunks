@@ -138,11 +138,11 @@ type
     HighCut: Double;
     BandDealiasSecondOrder: Boolean; // otherwise first order
     BandBWeighting: Boolean; // otherwise A-weighting
-    BandWeightingApplyCount: Integer;
+    BandWeightingApplyPower: Double;
     OutputBitDepth: Integer; // max 8Bits
     MinChunkSize: Integer;
     ChunksPerFrame: Integer;
-    UseCUDA: Boolean;
+    UsePython: Boolean;
 
     sampleRate: Integer;
     sampleCount: Integer;
@@ -259,13 +259,20 @@ begin
     begin
       bnd := bands[i];
 
-      bnd.desiredChunkCount := min(bnd.globalData^.chunkCount, round(sz * bnd.globalData^.weight * bnd.rmsPower));
-      full := full and (bnd.desiredChunkCount = bnd.globalData^.chunkCount);
+      bnd.desiredChunkCount := round(sz * bnd.globalData^.weight * bnd.rmsPower);
+
+      bnd.desiredChunkCount := max(1, bnd.desiredChunkCount);
+      bnd.desiredChunkCount := min(bnd.globalData^.chunkCount * bnd.globalData^.chunkSize div encoder.MinChunkSize, bnd.desiredChunkCount);
+
+      full := full and (bnd.desiredChunkCount = bnd.globalData^.chunkCount * bnd.globalData^.chunkSize);
 
       allCC += bnd.desiredChunkCount;
     end;
     sz += 0.1;
   until (allCC >= encoder.ChunksPerFrame) or full;
+
+  for i := 0 to BandCount - 1 do
+    bands[i].desiredChunkCount := bands[i].desiredChunkCount * encoder.MinChunkSize div bands[i].globalData^.chunkSize;
 
   if encoder.verbose then
   begin
@@ -578,7 +585,10 @@ begin
     end;
   end;
 
-  KMeansGenerate(XY, Length(XY), Length(XY[0]), desiredChunkCount, prec, i, C, XYC);
+  if frame.encoder.UsePython then
+    DoExternalKMeans(XY, desiredChunkCount, 1, prec, False, XYC)
+  else
+    KMeansGenerate(XY, Length(XY), Length(XY[0]), desiredChunkCount, prec, i, C, XYC);
 
   for i := 0 to desiredChunkCount - 1 do
   begin
@@ -1065,7 +1075,7 @@ begin
       // A-weighting
       wgt := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
 
-    bnd.weight := 1.0 / intpower(wgt, BandWeightingApplyCount);
+    bnd.weight := power(wgt, BandWeightingApplyPower);
 
     bandData[i] := bnd;
   end;
@@ -1188,11 +1198,11 @@ begin
   HighCut := 16000.0;
   BandDealiasSecondOrder := True;
   BandBWeighting := True;
-  BandWeightingApplyCount := 1;
+  BandWeightingApplyPower := 0.0;
   OutputBitDepth := 8;
   MinChunkSize := 16;
   ChunksPerFrame:= 256;
-  UseCUDA := False;
+  UsePython := False;
 
   frames := TFrameList.Create;
 end;
@@ -1568,11 +1578,11 @@ begin
       WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
       WriteLn(#9'-bwa'#9'use A-weighting for bands (otherwise B-weighting)');
-      WriteLn(#9'-bwc'#9'band weighting apply count (0-inf)');
+      WriteLn(#9'-bwp'#9'band weighting apply power');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
       WriteLn(#9'-mcs'#9'minimum chunk size');
       WriteLn(#9'-v'#9'verbose K-means');
-      WriteLn(#9'-cu'#9'use CUDA GPU K-means');
+      WriteLn(#9'-py'#9'use Python script for clustering');
       WriteLn;
       Writeln('(source file must be 16bit mono WAV)');
       WriteLn;
@@ -1588,11 +1598,11 @@ begin
       enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
       enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
       enc.BandBWeighting :=  ParamStart('-bwa') = -1;
-      enc.BandWeightingApplyCount := round(ParamValue('-bwc', enc.BandWeightingApplyCount));
+      enc.BandWeightingApplyPower := round(ParamValue('-bwp', enc.BandWeightingApplyPower));
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.MinChunkSize :=  round(ParamValue('-mcs', enc.MinChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
-      enc.UseCUDA := ParamStart('-cu') <> -1;
+      enc.UsePython := ParamStart('-py') <> -1;
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('Precision = ', enc.Precision);
@@ -1601,10 +1611,10 @@ begin
       WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
       WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
       WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
-      WriteLn('BandWeightingApplyCount = ', enc.BandWeightingApplyCount);
+      WriteLn('BandWeightingApplyPower = ', FloatToStr(enc.BandWeightingApplyPower));
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
       WriteLn('MinChunkSize = ', enc.MinChunkSize);
-      WriteLn('UseCUDA = ', BoolToStr(enc.UseCUDA, True));
+      WriteLn('UsePython = ', BoolToStr(enc.UsePython, True));
       WriteLn;
 
       enc.Load;
