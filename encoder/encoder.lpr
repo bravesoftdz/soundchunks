@@ -1281,8 +1281,7 @@ class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, bitShift: Int
 var
   smp16: SmallInt;
 begin
-  smp16 := make16BitSample(smp);
-  smp16 := (smp16 - (sign(smp16) shl (max(0, bitShift - 1)))) div (1 shl bitShift);
+  smp16 := round(smp * (1 shl (15 - bitShift)));
   Result := EnsureRange(smp16 + (1 shl (OutBitDepth - 1)), 0, (1 shl OutBitDepth) - 1);
 end;
 
@@ -1296,8 +1295,7 @@ var
   smp16: SmallInt;
 begin
   smp16 := SmallInt(smp) - (1 shl (OutBitDepth - 1));
-  smp16 := smp16 * (1 shl bitShift);
-  Result := makeFloatSample(smp16);
+  Result := smp16 / (1 shl (15 - bitShift));
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
