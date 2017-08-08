@@ -5,6 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
+  InputSNRDb = -90.3; // 16bit
   BandCount = 4;
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
     (0.503, 0.816),
@@ -68,7 +69,7 @@ type
     constructor Create(bnd: TBand; idx: Integer);
     destructor Destroy; override;
 
-    procedure ComputeDstFFT;
+    procedure ComputeFFT(FromDstData: Boolean);
     procedure InitMix;
     procedure AddToMix(afft: TComplex1DArray);
     procedure FinalizeMix(IntoDstData: Boolean);
@@ -100,7 +101,6 @@ type
 
     procedure MakeChunks;
 
-    procedure HierarchicalReduce;
     procedure KMeansReduce;
     procedure MakeDstData;
   end;
@@ -246,11 +246,17 @@ end;
 procedure TFrame.FindBandDesiredChunkCount;
 var
   i, allCC: Integer;
-  sz: Double;
+  sz, dbh: Double;
   full: Boolean;
   bnd: TBand;
   s: String;
 begin
+
+  dbh := -MaxDouble;
+  for i := 0 to BandCount - 1 do
+    dbh := max(dbh, bands[i].rmsPower);
+  dbh := max(InputSNRDb + 1.0, dbh);
+
   sz := 1;
   repeat
     full := True;
@@ -259,26 +265,23 @@ begin
     begin
       bnd := bands[i];
 
-      bnd.desiredChunkCount := round(sz * bnd.globalData^.weight * bnd.rmsPower);
+      bnd.desiredChunkCount := round(sz * bnd.globalData^.weight * max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb));
 
       bnd.desiredChunkCount := max(1, bnd.desiredChunkCount);
-      bnd.desiredChunkCount := min(bnd.globalData^.chunkCount * bnd.globalData^.chunkSize div encoder.MinChunkSize, bnd.desiredChunkCount);
+      bnd.desiredChunkCount := min(bnd.globalData^.chunkCount, bnd.desiredChunkCount);
 
-      full := full and (bnd.desiredChunkCount = bnd.globalData^.chunkCount * bnd.globalData^.chunkSize);
+      full := full and (bnd.desiredChunkCount = bnd.globalData^.chunkCount);
 
-      allCC += bnd.desiredChunkCount;
+      allCC += bnd.desiredChunkCount * bands[i].globalData^.chunkSize div encoder.MinChunkSize;
     end;
     sz += 0.1;
   until (allCC >= encoder.ChunksPerFrame) or full;
-
-  for i := 0 to BandCount - 1 do
-    bands[i].desiredChunkCount := bands[i].desiredChunkCount * encoder.MinChunkSize div bands[i].globalData^.chunkSize;
 
   if encoder.verbose then
   begin
     s := '#' + IntToStr(index) + #9;
     for i := 0 to BandCount - 1 do
-      s := s + IntToStr(bands[i].desiredChunkCount) + #9;
+      s := s + IntToStr(bands[i].desiredChunkCount) + #9 + FormatFloat('0.00', bands[i].rmsPower) + #9;
     WriteLn(s);;
   end;
 end;
@@ -297,11 +300,7 @@ begin
     bnd.MakeChunks;
 
     if not encoder.CRSearch then
-{$if true}
       bnd.KMeansReduce;
-{$else}
-      bnd.HierarchicalReduce;
-{$endif}
 
     bnd.MakeDstData;
   end;
@@ -352,7 +351,7 @@ begin
   for i := startSample to endSample do
     rmsPower += sqr(globalData^.filteredData[i]);
   rmsPower := sqrt(rmsPower / (endSample - startSample + 1)) - 1.0 / Low(SmallInt);
-//  rmsPower := 10.0 * log10(rmsPower);
+  rmsPower := 20.0 * log10(rmsPower);
 
   chunks := TChunkList.Create;
   reducedChunks := TChunkList.Create;
@@ -377,151 +376,9 @@ begin
     chunk := TChunk.Create(Self, i);
     chunk.MakeDstData;
     if not frame.encoder.CRSearch then
-      chunk.ComputeDstFFT;
+      chunk.ComputeFFT(True);
     chunks.Add(chunk);
   end;
-end;
-
-procedure TBand.HierarchicalReduce;
-var
-  rowCount: Integer;
-  Dists: TDoubleDynArray2;
-  lChunks: array of TChunk;
-
-  function GetCnt: Integer;
-  var
-    i: Integer;
-  begin
-    Result := 0;
-    for i := 0 to rowCount - 1 do
-      if Assigned(lChunks[i]) then
-        Inc(Result);
-  end;
-
-  function GetMinDistPair(out a, b: Integer): Double;
-  var
-    i, j: Integer;
-    ba, bb: Integer;
-    bdist, d: Double;
-  begin
-    ba := -1;
-    bb := -1;
-    bdist := MaxSingle;
-
-    for i := 0 to rowCount - 1 do
-      for j := i + 1 to rowCount - 1 do
-      begin
-        d := Dists[i, j];
-        if (bdist = MaxSingle) or (d <> MaxSingle) and (d < bdist) then
-        begin
-          ba := i;
-          bb := j;
-          bdist := d;
-        end;
-      end;
-
-    Assert(Assigned(lChunks[ba]));
-    Assert(Assigned(lChunks[bb]));
-
-    a := ba;
-    b := bb;
-    Result := bdist;
-  end;
-
-  function sqr8b(x: Double): Double;
-  begin
-    Result := sqr(x / High(ShortInt));
-  end;
-
-  function GetDist(a, b: Integer): Double;
-  var
-    k: Integer;
-  begin
-    if not Assigned(lChunks[a]) or not Assigned(lChunks[b]) then
-      Exit(MaxSingle);
-
-    Result := 0.0;
-
-    // add first and last sample to features to allow continuity between chunks
-    Result += sqr8b(chunks[a].dstData[0] - chunks[b].dstData[0]);
-    Result += sqr8b(chunks[a].dstData[globalData^.chunkSize - 1] - chunks[b].dstData[globalData^.chunkSize - 1]);
-    // add approximate derivatives of first and last sample to features to allow continuity between chunks
-    Result += sqr8b((-chunks[a].dstData[0] + chunks[a].dstData[1]) - (-chunks[b].dstData[0] + chunks[b].dstData[1]));
-    Result += sqr8b((chunks[a].dstData[globalData^.chunkSize - 1] - chunks[a].dstData[globalData^.chunkSize - 2]) -
-      (chunks[b].dstData[globalData^.chunkSize - 1] - chunks[b].dstData[globalData^.chunkSize - 2]));
-
-    for k := 0 to globalData^.chunkSize - 1 do
-    begin
-      Result += sqr(lChunks[a].fft[k].X - lChunks[b].fft[k].X);
-      Result += sqr(lChunks[a].fft[k].Y - lChunks[b].fft[k].Y);
-    end;
-  end;
-
-var
-  a, b, i, j, pos, cnt: Integer;
-  dst, d: Double;
-  chk: TChunk;
-begin
-  if (frame.encoder.Precision = 0) or (desiredChunkCount = globalData^.chunkCount) then Exit;
-
-  rowCount := chunks.Count;
-
-  SetLength(lChunks, rowCount);
-  pos := 0;
-  for i := 0 to chunks.Count - 1 do
-  begin
-    chk := TChunk.Create(Self, i);
-    lChunks[pos] := chk;
-    chk.AddToMix(chunks[i].fft);
-    chk.FinalizeMix(True);
-    chunks[i].reducedChunk := chk;
-    Inc(pos);
-  end;
-
-  SetLength(Dists, rowCount, rowCount);
-  for i := 0 to rowCount - 1 do
-    for j := i to rowCount - 1 do
-    begin
-      dst := GetDist(i, j);
-      Dists[i, j] := dst;
-      Dists[j, i] := dst;
-    end;
-
-  cnt := rowCount;
-  while cnt > frame.encoder.ChunksPerFrame do
-  begin
-    dst := GetMinDistPair(a, b);
-
-    for i := 0 to lChunks[b].mixList.Count - 1 do
-      lChunks[a].AddToMix(lChunks[b].mixList[i]);
-    lChunks[a].FinalizeMix(True);
-
-    for i := 0 to chunks.Count - 1 do
-      if chunks[i].reducedChunk = lChunks[b] then
-        chunks[i].reducedChunk := lChunks[a];
-
-    FreeAndNil(lChunks[b]);
-    for i := 0 to rowCount - 1 do
-    begin
-      Dists[b, i] := MaxSingle;
-      Dists[i, b] := MaxSingle;
-    end;
-
-    for i := 0 to rowCount - 1 do
-    begin
-      d := GetDist(a, i);
-      Dists[i, a] := d;
-      Dists[a, i] := d;
-    end;
-
-    cnt := GetCnt;
-    //WriteLn(cnt, #9,  FormatFloat('0.000', dst), #9, a, #9, b);
-  end;
-
-
-  for i := 0 to rowCount - 1 do
-    if Assigned(lChunks[i]) then
-      reducedChunks.Add(lChunks[i]);
 end;
 
 procedure TBand.KMeansReduce;
@@ -674,15 +531,22 @@ begin
   inherited Destroy;
 end;
 
-procedure TChunk.ComputeDstFFT;
+procedure TChunk.ComputeFFT(FromDstData: Boolean);
 var
   i: Integer;
   dstf: TReal1DArray;
 begin
-  SetLength(dstf, band.globalData^.chunkSize);
-  for i := 0 to High(dstf) do
-    dstf[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
-  FFTR1D(dstf, band.globalData^.chunkSize, fft);
+  if FromDstData then
+  begin
+    SetLength(dstf, band.globalData^.chunkSize);
+    for i := 0 to High(dstf) do
+      dstf[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
+    FFTR1D(dstf, band.globalData^.chunkSize, fft);
+  end
+  else
+  begin
+    FFTR1D(srcData, band.globalData^.chunkSize, fft);
+  end;
 end;
 
 procedure TChunk.InitMix;
@@ -695,9 +559,18 @@ begin
   mixList.Add(afft);
 end;
 
+function CompareComplexX(const d1,d2): integer;
+var
+  c1 : Complex absolute d1;
+  c2 : Complex absolute d2;
+begin
+  Result := CompareValue(c1.X, c2.X);
+end;
+
 procedure TChunk.FinalizeMix(IntoDstData: Boolean);
 var
   i, k: Integer;
+  acca: TComplex1DArray;
   acc: Complex;
   dstf: TReal1DArray;
 begin
@@ -705,19 +578,42 @@ begin
     Exit;
 
   SetLength(fft, band.globalData^.chunkSize);
+  SetLength(acca, mixList.Count);
+
   for k := 0 to band.globalData^.chunkSize - 1 do
   begin
-    acc.X := 0.0;
-    acc.Y := 0.0;
 
-    for i := 0 to mixList.Count - 1 do
+    acc.X := 0;
+    acc.Y := 0;
+    if mixList.Count >= 7 then
     begin
-      acc.X += mixList[i][k].X;
-      acc.Y += mixList[i][k].Y;
-    end;
+      // remove outliers
 
-    acc.X /= mixList.Count;
-    acc.Y /= mixList.Count;
+      for i := 0 to mixList.Count - 1 do
+        acca[i]:= mixList[i][k];
+
+      anysort.AnySort(acca[0], mixList.Count, SizeOf(Complex), @CompareComplexX);
+
+      for i := 1 to mixList.Count - 2 do
+      begin
+        acc.X += acca[i].X;
+        acc.Y += acca[i].Y;
+      end;
+
+      acc.X /= mixList.Count - 2;
+      acc.Y /= mixList.Count - 2;
+    end
+    else
+    begin
+      for i := 0 to mixList.Count - 1 do
+      begin
+        acc.X += mixList[i][k].X;
+        acc.Y += mixList[i][k].Y;
+      end;
+
+      acc.X /= mixList.Count;
+      acc.Y /= mixList.Count;
+    end;
 
     fft[k] := acc;
   end;
@@ -1193,7 +1089,7 @@ begin
 
   BitRate := 128;
   Precision := 10;
-  BandTransFactor := 0.05;
+  BandTransFactor := 0.1;
   LowCut := 32.0;
   HighCut := 16000.0;
   BandDealiasSecondOrder := True;
