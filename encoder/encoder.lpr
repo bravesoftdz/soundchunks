@@ -19,6 +19,7 @@ type
   TEncoder = class;
   TFrame = class;
   TBand = class;
+  TChunk = class;
 
   TBandGlobalData = record
     fcl, fch: Double;
@@ -50,6 +51,8 @@ type
 
   { TChunk }
 
+  TChunkList = specialize TFPGObjectList<TChunk>;
+
   TChunk = class
   public
     band: TBand;
@@ -60,7 +63,7 @@ type
     dstBitShift: Integer;
     tmpIndex: Integer;
 
-    mixList: TComplex1DArrayList;
+    mixList: TChunkList;
 
     srcData: TDoubleDynArray;
     fft: TComplex1DArray;
@@ -71,13 +74,11 @@ type
 
     procedure ComputeFFT(FromDstData: Boolean);
     procedure InitMix;
-    procedure AddToMix(afft: TComplex1DArray);
+    procedure AddToMix(chk: TChunk);
     procedure FinalizeMix(IntoDstData: Boolean);
     procedure ComputeBitRange;
     procedure MakeDstData;
   end;
-
-  TChunkList = specialize TFPGObjectList<TChunk>;
 
   { TBand }
 
@@ -403,7 +404,7 @@ var
     for i := 0 to chunks.Count - 1 do
       if XYC[i] = AIndex then
       begin
-        reducedChunk.AddToMix(chunks[i].fft);
+        reducedChunk.AddToMix(chunks[i]);
         chunks[i].reducedChunk := reducedChunk;
       end;
 
@@ -431,8 +432,12 @@ begin
     sl := chunks[i].srcData[0];
     sh := chunks[i].srcData[globalData^.chunkSize - 1];
     // add approximate derivatives of first and last sample to features to allow continuity between chunks
-    fdl :=  -chunks[i].srcData[0] + chunks[i].srcData[1];
-    fdh :=  chunks[i].srcData[globalData^.chunkSize - 1] - chunks[i].srcData[globalData^.chunkSize - 2];
+    fdl :=  -1.5 * chunks[i].srcData[0] +
+            2.0 * chunks[i].srcData[1] +
+            -0.5 * chunks[i].srcData[2];
+    fdh :=  1.5 * chunks[i].srcData[globalData^.chunkSize - 1] +
+            -2.0 * chunks[i].srcData[globalData^.chunkSize - 2] +
+            0.5 * chunks[i].srcData[globalData^.chunkSize - 3];
 
     XY[i, 0] := sl * continuityFactor;
     XY[i, 1] := sh * continuityFactor;
@@ -528,7 +533,7 @@ begin
 
   reducedChunk := Self;
 
-  mixList := TComplex1DArrayList.Create;
+  mixList := TChunkList.Create(False);
 end;
 
 destructor TChunk.Destroy;
@@ -561,80 +566,52 @@ begin
   mixList.Clear;
 end;
 
-procedure TChunk.AddToMix(afft: TComplex1DArray);
+procedure TChunk.AddToMix(chk: TChunk);
 begin
-  mixList.Add(afft);
-end;
-
-function CompareComplexX(const d1,d2): integer;
-var
-  c1 : Complex absolute d1;
-  c2 : Complex absolute d2;
-begin
-  Result := CompareValue(c1.X, c2.X);
+  mixList.Add(chk);
 end;
 
 procedure TChunk.FinalizeMix(IntoDstData: Boolean);
 var
   i, k: Integer;
-  acca: TComplex1DArray;
-  acc: Complex;
-  dstf: TReal1DArray;
+  acc: Integer;
+  accf: Double;
 begin
   if not Assigned(mixList) or (mixList.Count = 0) then
     Exit;
 
-  SetLength(fft, band.globalData^.chunkSize);
-  SetLength(acca, mixList.Count);
-
-  for k := 0 to band.globalData^.chunkSize - 1 do
-  begin
-
-    acc.X := 0;
-    acc.Y := 0;
-    if mixList.Count >= 7 then
-    begin
-      // remove outliers
-
-      for i := 0 to mixList.Count - 1 do
-        acca[i]:= mixList[i][k];
-
-      anysort.AnySort(acca[0], mixList.Count, SizeOf(Complex), @CompareComplexX);
-
-      for i := 1 to mixList.Count - 2 do
-      begin
-        acc.X += acca[i].X;
-        acc.Y += acca[i].Y;
-      end;
-
-      acc.X /= mixList.Count - 2;
-      acc.Y /= mixList.Count - 2;
-    end
-    else
-    begin
-      for i := 0 to mixList.Count - 1 do
-      begin
-        acc.X += mixList[i][k].X;
-        acc.Y += mixList[i][k].Y;
-      end;
-
-      acc.X /= mixList.Count;
-      acc.Y /= mixList.Count;
-    end;
-
-    fft[k] := acc;
-  end;
-
   if IntoDstData then
   begin
-    FFTR1DInv(fft, band.globalData^.chunkSize, dstf);
     SetLength(dstData, band.globalData^.chunkSize);
-    for i := 0 to band.globalData^.chunkSize - 1 do
-      dstData[i] := EnsureRange(round(dstf[i] * High(ShortInt)), Low(ShortInt), High(ShortInt)) - Low(ShortInt);
+
+    for k := 0 to band.globalData^.chunkSize - 1 do
+    begin
+      acc := 0;
+
+      for i := 0 to mixList.Count - 1 do
+        acc += mixList[i].dstData[k];
+
+      dstData[k] := acc div mixList.Count;
+    end;
+
+    ComputeFFT(True);
+    ComputeBitRange;
   end
   else
   begin
-    FFTR1DInv(fft, band.globalData^.chunkSize, srcData);
+    SetLength(srcData, band.globalData^.chunkSize);
+
+    for k := 0 to band.globalData^.chunkSize - 1 do
+    begin
+      accf := 0.0;
+
+      for i := 0 to mixList.Count - 1 do
+        accf += mixList[i].srcData[k];
+
+      srcData[k] := accf / mixList.Count;
+    end;
+
+    ComputeFFT(False);
     MakeDstData;
   end;
 end;
@@ -647,6 +624,7 @@ begin
   for i := 0 to band.globalData^.chunkSize - 1 do
     hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
   bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), band.frame.encoder.OutputBitDepth, 16);
+  dstBitShift := bitRange - band.frame.encoder.OutputBitDepth;
 end;
 
 procedure TChunk.MakeDstData;
@@ -654,7 +632,6 @@ var
   i: Integer;
 begin
   ComputeBitRange;
-  dstBitShift := bitRange - band.frame.encoder.OutputBitDepth;
   SetLength(dstData, band.globalData^.chunkSize);
   for i := 0 to band.globalData^.chunkSize - 1 do
     dstData[i] := TEncoder.makeOutputSample(srcData[i], band.frame.encoder.OutputBitDepth, dstBitShift);
