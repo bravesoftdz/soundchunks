@@ -17,7 +17,7 @@ data = np.delete(data, 0, 1)
 
 #clus = cluster.KMeans(n_clusters = args.n, verbose = args.d, tol = args.t, random_state = 42, precompute_distances = True, copy_x = False, algorithm = 'full')
 #clus = cluster.AgglomerativeClustering(n_clusters = args.n)
-clus = cluster.SpectralClustering(n_clusters = args.n, assign_labels = 'discretize', gamma = 0.15, random_state = 42)
+clus = cluster.SpectralClustering(n_clusters = args.n, assign_labels = 'discretize', gamma = 0.15, random_state = 42, eigen_tol = args.t)
 
 clus.fit(data)
 
