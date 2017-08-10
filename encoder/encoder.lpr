@@ -9,7 +9,7 @@ const
   InputSNRDb = -90.3; // 16bit
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
     (0.503, 0.816),
-    (1.815, 1.815)
+    (1.006, 0.949)
   );
 
 type
@@ -34,7 +34,7 @@ type
   TSecondOrderCIC = class
   private
     v, vv, v2: Double;
-    R, pos: Integer;
+    R, R2, pos, pos2: Integer;
     smps, vs: TDoubleDynArray;
   public
     Ratio: Integer;
@@ -308,7 +308,7 @@ begin
   until (allSz > encoder.MaxFrameSize) or full;
 
 
-  if encoder.verbose and not encoder.BWSearch then
+  if encoder.verbose and not (encoder.BWSearch or encoder.CRSearch) then
   begin
     s := '#' + IntToStr(index) + ', ' + IntToStr(FrameSize) + #9;
     for i := 0 to BandCount - 1 do
@@ -345,11 +345,13 @@ begin
   SecondOrder := ASecondOrder;
   Ratio := ARatio;
   R := max(1, ARatio);
-  SetLength(vs, R);
+  R2 := R div 2;
   SetLength(smps, R);
+  SetLength(vs, R2);
   v := 0;
   v2 := 0;
   pos := 0;
+  pos2 := 0;
 end;
 
 function TSecondOrderCIC.ProcessSample(Smp: Double): Double;
@@ -358,12 +360,13 @@ begin
 
   v := v + smp - smps[pos];
   smps[pos] := smp;
-
-  vv := v / R;
-  v2 := v2 + vv - vs[pos];
-  vs[pos] := vv;
-
   pos := (pos + 1) mod R;
+
+  vv := v / R2;
+  v2 := v2 + vv - vs[pos2];
+  vs[pos2] := vv;
+  pos2 := (pos2 + 1) mod R2;
+
 
   Result := ifthen(SecondOrder, v2, v);
 end;
@@ -993,7 +996,7 @@ begin
 
   MakeBandGlobalData2;
 
-  if verbose and not BWSearch then
+  if verbose and not (BWSearch or CRSearch) then
   begin
     writeln('MaxFrameSize = ', MaxFrameSize);
     writeln('FrameCount = ', frameCount);
@@ -1001,7 +1004,7 @@ begin
     writeln('ProjectedByteSize = ', projectedByteSize);
   end;
 
-  if not BWSearch then
+  if not (BWSearch or CRSearch) then
     for i := 0 to BandCount - 1 do
        WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
 
@@ -1044,7 +1047,8 @@ procedure TEncoder.MakeFrames;
   end;
 begin
   ProcThreadPool.DoParallelLocalProc(@DoFrame, 0, frameCount - 1, nil);
-  WriteLn;
+  if not CRSearch then
+    WriteLn;
 end;
 
 function TEncoder.DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
@@ -1113,7 +1117,7 @@ var
   cic: array[0 .. BandCount - 1] of TSecondOrderCIC;
   offset: array[0 .. BandCount - 1] of Integer;
 begin
-  if not BWSearch then
+  if not (BWSearch or CRSearch) then
     WriteLn('MakeDstData');
 
   SetLength(dstData, frameSampleCount * frames.Count);
