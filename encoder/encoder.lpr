@@ -1089,7 +1089,7 @@ begin
   outputFN := OutFN;
 
   BitRate := 128;
-  Precision := 10;
+  Precision := 7;
   BandTransFactor := 0.1;
   LowCut := 32.0;
   HighCut := 18000.0;
