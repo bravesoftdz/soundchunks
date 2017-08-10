@@ -109,7 +109,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\lame_test\else3.wav ..\out2.wav -v -py"/>
+        <CommandLineParams Value="..\my_test\testxn.wav ..\out3.wav -v -py -sbw"/>
       </local>
     </RunParams>
     <Units Count="3">
@@ -152,13 +152,10 @@
         <StackChecks Value="True"/>
       </Checks>
       <VerifyObjMethodCallValidity Value="True"/>
-      <Optimizations>
-        <OptimizationLevel Value="0"/>
-      </Optimizations>
     </CodeGeneration>
     <Linking>
       <Debugging>
-        <DebugInfoType Value="dsDwarf2"/>
+        <DebugInfoType Value="dsStabs"/>
         <UseHeaptrc Value="True"/>
         <TrashVariables Value="True"/>
       </Debugging>

@@ -5,17 +5,14 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  InputSNRDb = -90.3; // 16bit
   BandCount = 4;
+  InputSNRDb = -90.3; // 16bit
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
     (0.503, 0.816),
     (1.815, 1.815)
   );
 
 type
-  TComplex1DArrayList = specialize TFPGList<TComplex1DArray>;
-  TDoubleDynArray2 = array of TDoubleDynArray;
-
   TEncoder = class;
   TFrame = class;
   TBand = class;
@@ -23,7 +20,6 @@ type
 
   TBandGlobalData = record
     fcl, fch: Double;
-    weight: Double;
     underSample, underSampleUnMin: Integer;
     chunkSize, chunkSizeUnMin: Integer;
     chunkCount: Integer;
@@ -89,6 +85,7 @@ type
     index: Integer;
     rmsPower: Double;
     desiredChunkCount: Integer;
+    weight: Double;
 
     srcData: PDouble;
     dstData: TDoubleDynArray;
@@ -115,6 +112,9 @@ type
     index: Integer;
     SampleCount: Integer;
     FrameSize: Integer;
+    BandRMSWeighting: Boolean;
+    BandBWeighting: Boolean; // otherwise A-weighting
+    BandWeightingApplyPower: Double;
 
     bands: array[0..BandCount - 1] of TBand;
 
@@ -139,11 +139,10 @@ type
     LowCut: Double;
     HighCut: Double;
     BandDealiasSecondOrder: Boolean; // otherwise first order
-    BandBWeighting: Boolean; // otherwise A-weighting
-    BandWeightingApplyPower: Double;
     OutputBitDepth: Integer; // max 8Bits
     MinChunkSize: Integer;
     MaxFrameSize: Integer;
+    MaxChunksPerBand: Integer;
     UsePython: Boolean;
 
     SampleRate: Integer;
@@ -151,7 +150,7 @@ type
     projectedByteSize, frameCount, frameSampleCount: Integer;
     verbose: Boolean;
 
-    CRSearch: Boolean;
+    BWSearch, CRSearch: Boolean;
     CR1, CR2: Double;
 
     srcHeader: array[$00..$2b] of Byte;
@@ -185,18 +184,18 @@ type
     procedure MakeBandGlobalData2;
     procedure MakeBandSrcData(AIndex: Integer);
 
+    procedure PrepareFrames;
     procedure MakeFrames;
     procedure MakeDstData;
 
+    procedure SearchBestBandWeighting;
     procedure SearchBestCorrRatios;
 
     function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
     function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
-    function ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
-    function ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
-      smpTst: TDoubleDynArray2): TDoubleDynArray;
+    function ComputeEAQUAL(chunkSz: Integer; UseDIX, Verbz: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
   end;
 
 
@@ -228,6 +227,10 @@ begin
   encoder := enc;
   index := idx;
 
+  BandRMSWeighting := True;
+  BandBWeighting := True;
+  BandWeightingApplyPower := 0.0;
+
   SampleCount := encoder.frameSampleCount;
 
   for i := 0 to BandCount - 1 do
@@ -249,17 +252,37 @@ procedure TFrame.FindBandDesiredChunkCount;
 var
   i, allSz: Integer;
   sz, dbh: Double;
+  wgt, fsq: Double;
   full, compressed: Boolean;
   bnd: TBand;
   s: String;
   dcc: array[0..BandCount - 1] of Integer;
 begin
-
   dbh := -MaxDouble;
   for i := 0 to BandCount - 1 do
     dbh := max(dbh, bands[i].rmsPower);
   dbh := max(InputSNRDb + 1.0, dbh);
 
+  for i := 0 to BandCount - 1 do
+  begin
+    bnd := bands[i];
+
+    fsq := bnd.globalData^.fcl * bnd.globalData^.fch * encoder.SampleRate * encoder.SampleRate;
+
+    if BandBWeighting then
+      // B-weighting
+      wgt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)))
+    else
+      // A-weighting
+      wgt := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
+
+    bnd.weight := power(wgt, BandWeightingApplyPower);
+    if BandRMSWeighting then
+      bnd.weight *= max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb);
+  end;
+
+
+  allSz := 0;
   sz := 1;
   repeat
     FrameSize := allSz;
@@ -272,10 +295,10 @@ begin
     begin
       bnd := bands[i];
 
-      dcc[i] := round(sz * bnd.globalData^.weight * max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb));
-      dcc[i] := EnsureRange(dcc[i], 1, bnd.globalData^.chunkCount);
+      dcc[i] := round(sz * bnd.weight);
+      dcc[i] := EnsureRange(dcc[i], 1, min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount));
 
-      compressed := dcc[i] < bnd.globalData^.chunkCount;
+      compressed := dcc[i] < min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount);
       full := full and not compressed;
 
       allSz += dcc[i] * bnd.globalData^.chunkSize + Ord(compressed) * bnd.globalData^.chunkCount + SizeOf(Byte);
@@ -285,7 +308,7 @@ begin
   until (allSz > encoder.MaxFrameSize) or full;
 
 
-  if encoder.verbose then
+  if encoder.verbose and not encoder.BWSearch then
   begin
     s := '#' + IntToStr(index) + ', ' + IntToStr(FrameSize) + #9;
     for i := 0 to BandCount - 1 do
@@ -313,7 +336,7 @@ begin
     bnd.MakeDstData;
   end;
 
-  if not encoder.verbose then
+  if not encoder.verbose or encoder.BWSearch then
     Write('.');
 end;
 
@@ -378,6 +401,7 @@ var
   i: Integer;
   chunk: TChunk;
 begin
+  chunks.Clear;
   chunks.Capacity := globalData^.chunkCount;
   for i := 0 to globalData^.chunkCount - 1 do
   begin
@@ -459,6 +483,8 @@ begin
   else
     KMeansGenerate(XY, Length(XY), Length(XY[0]), desiredChunkCount, prec, i, C, XYC);
 
+  reducedChunks.Clear;
+  reducedChunks.Capacity := desiredChunkCount;
   for i := 0 to desiredChunkCount - 1 do
   begin
     chunk := TChunk.Create(Self, i);
@@ -830,7 +856,7 @@ procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
 var
   fs: TFileStream;
 begin
-  WriteLn('SaveBandWAV #', index, ' ', fn);
+  //WriteLn('SaveBandWAV #', index, ' ', fn);
 
   fs := TFileStream.Create(fn, fmCreate or fmShareDenyWrite);
   try
@@ -934,52 +960,15 @@ begin
   bandData[AIndex] := bnd;
 end;
 
-procedure TEncoder.MakeBandGlobalData2;
-var
-  wgt, fsq: Double;
-  i: Integer;
-  bnd: TBandGlobalData;
-begin
-  for i := 0 to BandCount - 1 do
-  begin
-    bnd := bandData[i];
-
-    bnd.chunkCount := (frameSampleCount - 1) div (bnd.chunkSize * bnd.underSample) + 1;
-
-    fsq := bnd.fcl * bnd.fch * SampleRate * SampleRate;
-
-    if BandBWeighting then
-      // B-weighting
-      wgt := sqr(12194.0) * sqrt(fsq) * fsq / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt(fsq + sqr(158.5)))
-    else
-      // A-weighting
-      wgt := sqr(12194.0) * sqr(fsq) / ((fsq + sqr(20.6)) * (fsq + sqr(12194.0)) * sqrt((fsq + sqr(107.7)) * (fsq + sqr(737.9))));
-
-    bnd.weight := power(wgt, BandWeightingApplyPower);
-
-    bandData[i] := bnd;
-  end;
-end;
-
-
-procedure TEncoder.MakeFrames;
+procedure TEncoder.PrepareFrames;
 
   procedure DoBand(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   begin
     MakeBandSrcData(AIndex);
   end;
 
-  procedure DoFrame(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  var
-    frm: TFrame;
-  begin
-    frm := frames[AIndex];
-
-    frm.MakeBands;
-  end;
-
 var
-  i, blockSampleCount, blockChunkCount, blockCount, curStart, curEnd: Integer;
+  i, blockSampleCount, blockChunkCount, curStart, curEnd: Integer;
   frm: TFrame;
 begin
   MakeBandGlobalData;
@@ -993,8 +982,6 @@ begin
   for i := 0 to BandCount - 1 do
     blockChunkCount += blockSampleCount div (bandData[i].underSample * bandData[i].chunkSize);
 
-  blockCount := (SampleCount - 1) div blockSampleCount + 1;
-
   // pass 1
   projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
   frameCount :=  (projectedByteSize - 1) div MaxFrameSize + 1;
@@ -1006,7 +993,7 @@ begin
 
   MakeBandGlobalData2;
 
-  if verbose then
+  if verbose and not BWSearch then
   begin
     writeln('MaxFrameSize = ', MaxFrameSize);
     writeln('FrameCount = ', frameCount);
@@ -1014,11 +1001,13 @@ begin
     writeln('ProjectedByteSize = ', projectedByteSize);
   end;
 
-  for i := 0 to BandCount - 1 do
-     WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
+  if not BWSearch then
+    for i := 0 to BandCount - 1 do
+       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
 
   ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
 
+  frames.Clear;
   for i := 0 to frameCount - 1 do
   begin
     curStart := i * frameSampleCount;
@@ -1027,7 +1016,33 @@ begin
     frm := TFrame.Create(Self, i, curStart, curEnd);
     frames.Add(frm);
   end;
+end;
 
+procedure TEncoder.MakeBandGlobalData2;
+var
+  i: Integer;
+  bnd: TBandGlobalData;
+begin
+  for i := 0 to BandCount - 1 do
+  begin
+    bnd := bandData[i];
+    bnd.chunkCount := (frameSampleCount - 1) div (bnd.chunkSize * bnd.underSample) + 1;
+    bandData[i] := bnd;
+  end;
+end;
+
+
+procedure TEncoder.MakeFrames;
+
+  procedure DoFrame(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  var
+    frm: TFrame;
+  begin
+    frm := frames[AIndex];
+
+    frm.MakeBands;
+  end;
+begin
   ProcThreadPool.DoParallelLocalProc(@DoFrame, 0, frameCount - 1, nil);
   WriteLn;
 end;
@@ -1073,13 +1088,12 @@ begin
   Precision := 10;
   BandTransFactor := 0.1;
   LowCut := 32.0;
-  HighCut := 16000.0;
+  HighCut := 18000.0;
   BandDealiasSecondOrder := True;
-  BandBWeighting := True;
-  BandWeightingApplyPower := 0.0;
   OutputBitDepth := 8;
   MinChunkSize := 16;
   MaxFrameSize:= 7168;
+  MaxChunksPerBand := 128;
   UsePython := False;
 
   frames := TFrameList.Create;
@@ -1099,7 +1113,8 @@ var
   cic: array[0 .. BandCount - 1] of TSecondOrderCIC;
   offset: array[0 .. BandCount - 1] of Integer;
 begin
-  WriteLn('MakeDstData');
+  if not BWSearch then
+    WriteLn('MakeDstData');
 
   SetLength(dstData, frameSampleCount * frames.Count);
   FillWord(dstData[0], Length(dstData), 0);
@@ -1149,6 +1164,74 @@ begin
   end;
 end;
 
+procedure TEncoder.SearchBestBandWeighting;
+const
+  TestCount = 11;
+  bwr: array[0..10] of Boolean = (True, True, True, True, True, True, True, False, False, False, False);
+  bwa: array[0..10] of Boolean = (False, False, False, True, True, False, False, False, False, False, True);
+  bwp: array[0..10] of Double = (0, 1, -1, 1, -1, 2, -2, 0, 1, 2, 1);
+
+var
+  results: array[0..TestCount - 1] of TDoubleDynArray;
+
+  procedure DoEAQ(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
+  var
+    ref, tst: TSmallIntDynArray;
+  begin
+    ref := Copy(srcData, AIndex * frameSampleCount, frameSampleCount);
+    SetLength(ref, frameSampleCount);
+    tst := Copy(dstData, AIndex * frameSampleCount, frameSampleCount);
+    results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, False, False, ref, tst);
+  end;
+
+var
+  i, j: Integer;
+  best: Double;
+begin
+  BWSearch := True;
+  try
+    for i := 0 to TestCount - 1 do
+    begin
+      PrepareFrames;
+
+      for j := 0 to frameCount - 1 do
+      begin
+        frames[j].BandRMSWeighting := bwr[i];
+        frames[j].BandBWeighting := not bwa[i];
+        frames[j].BandWeightingApplyPower := bwp[i];
+      end;
+
+      MakeFrames;
+      MakeDstData;
+
+      SetLength(results[i], frameCount);
+
+      ProcThreadPool.DoParallelLocalProc(@DoEAQ, 0, frameCount - 1, Pointer(i));
+    end;
+  finally
+    BWSearch := False;
+  end;
+
+  PrepareFrames;
+
+  for j := 0 to frameCount - 1 do
+  begin
+    best := -MaxDouble;
+    for i := 0 to TestCount - 1 do
+      if results[i, j] > best then
+      begin
+        best := results[i, j];
+        frames[j].BandRMSWeighting := bwr[i];
+        frames[j].BandBWeighting := not bwa[i];
+        frames[j].BandWeightingApplyPower := bwp[i];
+      end;
+    writeln('#', j, #9, frames[j].BandRMSWeighting, #9, frames[j].BandBWeighting, #9, FloatToStr(frames[j].BandWeightingApplyPower));
+  end;
+
+  MakeFrames;
+  MakeDstData;
+end;
+
 procedure TEncoder.SearchBestCorrRatios;
 
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
@@ -1156,10 +1239,11 @@ procedure TEncoder.SearchBestCorrRatios;
     CR1 := CICCorrRatio[BandDealiasSecondOrder, 0];
     CR2 := ACR1;
 
+    PrepareFrames;
     MakeFrames;
     MakeDstData;
     SaveWAV;
-    Result := DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
+    Result := -DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
 
     if Verbose then
       Write(#13'(', FormatFloat('0.00000', CR1), ', ', FormatFloat('0.00000', CR2), ')'#9, FormatFloat('0.00000', Result), '                ');
@@ -1344,12 +1428,13 @@ begin
     Result := InRange(y, a, c) or InRange(y, c, a);
 end;
 
-function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX: Boolean; const smpRef, smpTst: TDoubleDynArray): Double;
+function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX, Verbz: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
 var
-  i: Integer;
+  i, DupCnt: Integer;
   FNRef, FNTst: String;
   ms: TMemoryStream;
 begin
+  DupCnt := Max(1, round(15 * SampleRate / chunkSz));
 
   FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
   FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
@@ -1357,69 +1442,28 @@ begin
   ms := TMemoryStream.Create;
   try
     ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * SizeOf(SmallInt));
+    ms.WriteDWord(chunkSz * SizeOf(SmallInt) * DupCnt);
+    for i := 0 to DupCnt - 1  do
+      ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
 
-    for i := 0 to chunkSz - 1 do
-      ms.WriteWord(make16BitSample(smpRef[i]) - Low(SmallInt));
-
-    ms.SaveToFile(FNRef);
-    ms.Clear;
-
-    ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * SizeOf(SmallInt));
-
-    for i := 0 to chunkSz - 1 do
-      ms.WriteWord(make16BitSample(smpTst[i]) - Low(SmallInt));
-
-    ms.SaveToFile(FNTst);
-  finally
-    ms.Free;
-  end;
-
-  Result := DoExternalEAQUAL(FNRef, FNTst, False, UseDIX, chunkSz * 2);
-
-  DeleteFile(FNRef);
-  DeleteFile(FNTst);
-end;
-
-function TEncoder.ComputeEAQUALMulti(chunkSz: Integer; UseDIX: Boolean; const smpRef: TDoubleDynArray;
-  smpTst: TDoubleDynArray2): TDoubleDynArray;
-var
-  i, j: Integer;
-  FNRef, FNTst: String;
-  zeroes: TSmallIntDynArray;
-  ms: TMemoryStream;
-begin
-  if Length(smpTst) = 0 then
-    Exit(nil);
-
-  SetLength(zeroes, chunkSz);
-  FillWord(zeroes[0], chunkSz, 0);
-
-  FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
-  FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
-
-  ms := TMemoryStream.Create;
-  try
-    ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
-    for i := 0 to High(smpTst) do
+    if SampleRate < 44100 then
     begin
-      for j := 0 to chunkSz - 1 do
-        ms.WriteWord(make16BitSample(smpRef[j]) - Low(SmallInt));
-      ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
+      ms.Position := $18;
+      ms.WriteDWord(44100);
     end;
 
     ms.SaveToFile(FNRef);
     ms.Clear;
 
     ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * 2 * SizeOf(SmallInt) * Length(smpTst));
-    for i := 0 to High(smpTst) do
+    ms.WriteDWord(chunkSz * SizeOf(SmallInt) * DupCnt);
+    for i := 0 to DupCnt - 1  do
+      ms.Write(smpTst[0], chunkSz * SizeOf(SmallInt));
+
+    if SampleRate < 44100 then
     begin
-      for j := 0 to chunkSz - 1 do
-        ms.WriteWord(make16BitSample(smpTst[i, j]) - Low(SmallInt));
-      ms.Write(zeroes[0], chunkSz * SizeOf(SmallInt));
+      ms.Position := $18;
+      ms.WriteDWord(44100);
     end;
 
     ms.SaveToFile(FNTst);
@@ -1427,7 +1471,7 @@ begin
     ms.Free;
   end;
 
-  Result := DoExternalEAQUALMulti(FNRef, FNTst, UseDIX, Length(smpTst), chunkSz * 2);
+  Result := DoExternalEAQUAL(FNRef, FNTst, Verbz, UseDIX, -1);
 
   DeleteFile(FNRef);
   DeleteFile(FNTst);
@@ -1453,10 +1497,9 @@ begin
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
-      WriteLn(#9'-bwa'#9'use A-weighting for bands (otherwise B-weighting)');
-      WriteLn(#9'-bwp'#9'band weighting apply power');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
       WriteLn(#9'-mcs'#9'minimum chunk size');
+      WriteLn(#9'-sbw'#9'per frame search for best band weighting');
       WriteLn(#9'-v'#9'verbose K-means');
       WriteLn(#9'-py'#9'use Python script for clustering');
       WriteLn;
@@ -1473,8 +1516,6 @@ begin
       enc.HighCut :=  ParamValue('-hc', enc.HighCut);
       enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
       enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
-      enc.BandBWeighting :=  ParamStart('-bwa') = -1;
-      enc.BandWeightingApplyPower := round(ParamValue('-bwp', enc.BandWeightingApplyPower));
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.MinChunkSize :=  round(ParamValue('-mcs', enc.MinChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
@@ -1486,22 +1527,30 @@ begin
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
       WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
       WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
-      WriteLn('BandBWeighting = ', BoolToStr(enc.BandBWeighting, True));
-      WriteLn('BandWeightingApplyPower = ', FloatToStr(enc.BandWeightingApplyPower));
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
       WriteLn('MinChunkSize = ', enc.MinChunkSize);
       WriteLn('UsePython = ', BoolToStr(enc.UsePython, True));
       WriteLn;
 
       enc.Load;
-      enc.MakeFrames;
-      enc.MakeDstData;
+
+      if ParamStart('-sbw') <> -1 then
+      begin
+        enc.SearchBestBandWeighting;
+      end
+      else
+      begin
+        enc.PrepareFrames;
+        enc.MakeFrames;
+        enc.MakeDstData;
+      end;
+
       enc.SaveWAV;
       for i := 0 to BandCount - 1 do
         enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
-      enc.SaveRSC;
+      //enc.SaveRSC;
 
-      DoExternalEAQUAL(ParamStr(1), ParamStr(2), True, True, 2048);
+      enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
 
       if ParamStart('-scr') <> -1 then
         enc.SearchBestCorrRatios;

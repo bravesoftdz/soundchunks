@@ -12,7 +12,6 @@ type
 
 procedure DoExternalKMeans(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
-function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
 
 implementation
 
@@ -82,7 +81,7 @@ begin
               Inc(StderrBytesRead, StderrNumBytes);
           end
         else
-          Sleep(10);
+          Sleep(20);
       end;
 
     if PrintOut then
@@ -215,7 +214,7 @@ begin
   try
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'eaqual.exe';
-    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blklen ' + IntToStr(BlockLength));
+    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '"' + ifthen(BlockLength > 0, ' -blklen ' + IntToStr(BlockLength)));
     if not PrintStats then
       Process.Parameters.Add('-silent "' + SilFN + '"');
     Process.ShowWindow := swoHIDE;
@@ -224,18 +223,20 @@ begin
     i := 0;
     internalRuncommand(Process, Output, ErrOut, i, False); // destroys Process
 
-    if PrintStats then
+    Result := -10.0;
+    if PrintStats or not FileExists(SilFN) then
     begin
       OutSL.LineBreak := #13#10;
       OutSL.Text := Output;
       WriteLn(Output);
+      WriteLn(ErrOut);
 
       for i := 0 to OutSL.Count - 1 do
       begin
         Line := OutSL[i];
         if (Pos('Resulting ODG:', Line) = 1) and not UseDIX or (Pos('Resulting DIX:', Line) = 1) and UseDIX then
         begin
-          Result := -StrToFloatDef(RightStr(Line, Pos(#9, ReverseString(Line)) - 1), 0);
+          TryStrToFloat(RightStr(Line, Pos(#9, ReverseString(Line)) - 1), Result);
           Break;
         end;
       end;
@@ -247,57 +248,10 @@ begin
       Line := OutSL[2];
       OutSL.Delimiter := #9;
       OutSL.DelimitedText := Line;
-      Result := -StrToFloatDef(OutSL[Ord(UseDIX)], 0);
+      TryStrToFloat(OutSL[Ord(UseDIX)], Result);
     end;
 
     DeleteFile(SilFN);
-
-  finally
-    OutputStream.Free;
-    OutSL.Free;
-  end;
-end;
-
-function DoExternalEAQUALMulti(AFNRef, AFNTest: String; UseDIX: Boolean; BlockCount, BlockLength: Integer): TDoubleDynArray;
-var
-  i: Integer;
-  Line, Output, ErrOut, OutFN: String;
-  OutSL: TStringList;
-  Process: TProcess;
-  OutputStream: TMemoryStream;
-begin
-  Process := TProcess.Create(nil);
-  OutSL := TStringList.Create;
-  OutputStream := TMemoryStream.Create;
-  try
-    OutFN := GetTempFileName('', 'out-'+IntToStr(GetCurrentThreadId)+'.txt');
-
-    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
-    Process.Executable := 'eaqual.exe';
-    Process.Parameters.Add('-fref "' + AFNRef + '" -ftest "' + AFNTest + '" -blockout ' + IfThen(UseDIX, 'DI', 'ODG') + ' "' + OutFN + '" -blklen ' + IntToStr(BlockLength));
-    Process.ShowWindow := swoHIDE;
-    Process.Priority := ppIdle;
-
-    Assert(FileExists(AFNRef));
-    Assert(FileExists(AFNTest));
-    Assert(not FileExists(OutFN));
-
-    i := 0;
-    internalRuncommand(Process, Output, ErrOut, i, False); // destroys Process
-
-    Assert(FileExists(OutFN));
-
-    OutSL.LineBreak := #13#10;
-    OutSL.LoadFromFile(OutFN);
-
-    SetLength(Result, BlockCount);
-    for i := 0 to BlockCount - 1 do
-    begin
-      Line := OutSL[i * 2 + 2];
-      Result[i] := -StrToFloatDef(Line, 0.0);
-    end;
-
-    DeleteFile(OutFN);
 
   finally
     OutputStream.Free;
