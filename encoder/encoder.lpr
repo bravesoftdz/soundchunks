@@ -61,6 +61,7 @@ type
 
     mixList: TChunkList;
 
+    origSrcData: PDouble;
     srcData: TDoubleDynArray;
     fft: TComplex1DArray;
     dstData: TByteDynArray;
@@ -73,6 +74,7 @@ type
     procedure AddToMix(chk: TChunk);
     procedure FinalizeMix(IntoDstData: Boolean);
     procedure ComputeBitRange;
+    procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
   end;
 
@@ -191,7 +193,7 @@ type
     procedure SearchBestBandWeighting;
     procedure SearchBestCorrRatios;
 
-    function DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
+    function DoFilterCoeffs(fc, transFactor: Double; HighPass, Windowed: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
     function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
@@ -409,9 +411,10 @@ begin
   for i := 0 to globalData^.chunkCount - 1 do
   begin
     chunk := TChunk.Create(Self, i);
+    chunk.ComputeBitRange;
     chunk.MakeDstData;
     if not frame.encoder.CRSearch then
-      chunk.ComputeFFT(True);
+      chunk.ComputeFFT(False);
     chunks.Add(chunk);
   end;
 end;
@@ -531,34 +534,15 @@ end;
 { TChunk }
 
 constructor TChunk.Create(bnd: TBand; idx: Integer);
-var
-  j, k, pos, n: Integer;
-  acc: Double;
 begin
   index := idx;
   band := bnd;
 
   SetLength(srcData, band.globalData^.chunkSize);
 
-  for j := 0 to band.globalData^.chunkSize - 1 do
-  begin
-    pos := (idx * band.globalData^.chunkSize + j) * band.globalData^.underSample;
+  origSrcData := @band.srcData[idx * band.globalData^.chunkSize * band.globalData^.underSample];
 
-    acc := 0.0;
-    n := 0;
-    for k := 0 to band.globalData^.underSample - 1 do
-    begin
-      if pos + k >= band.frame.SampleCount then
-        Break;
-      acc += band.srcData[pos + k];
-      Inc(n);
-    end;
-
-    if n = 0 then
-      srcData[j] := 0
-    else
-      srcData[j] := acc / n;
-  end;
+  MakeSrcData(origSrcData);
 
   reducedChunk := Self;
 
@@ -575,19 +559,20 @@ end;
 procedure TChunk.ComputeFFT(FromDstData: Boolean);
 var
   i: Integer;
-  dstf: TReal1DArray;
+  ffb: TReal1DArray;
 begin
+  SetLength(ffb, band.globalData^.chunkSize);
   if FromDstData then
   begin
-    SetLength(dstf, band.globalData^.chunkSize);
-    for i := 0 to High(dstf) do
-      dstf[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
-    FFTR1D(dstf, band.globalData^.chunkSize, fft);
+    for i := 0 to High(ffb) do
+      ffb[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
   end
   else
   begin
-    FFTR1D(srcData, band.globalData^.chunkSize, fft);
+    for i := 0 to High(ffb) do
+      ffb[i] := srcData[i] * (1 shl (16 - bitRange));
   end;
+  FFTR1D(ffb, band.globalData^.chunkSize, fft);
 end;
 
 procedure TChunk.InitMix;
@@ -602,9 +587,10 @@ end;
 
 procedure TChunk.FinalizeMix(IntoDstData: Boolean);
 var
-  i, k: Integer;
+  i, k, sz: Integer;
   acc: Integer;
   accf: Double;
+  osrc: TDoubleDynArray;
 begin
   if not Assigned(mixList) or (mixList.Count = 0) then
     Exit;
@@ -622,25 +608,27 @@ begin
 
       dstData[k] := acc div mixList.Count;
     end;
-
-    ComputeFFT(True);
-    ComputeBitRange;
   end
   else
   begin
-    SetLength(srcData, band.globalData^.chunkSize);
+    sz := band.globalData^.chunkSize * band.globalData^.underSample * 2;
+    SetLength(osrc, sz * 3);
 
-    for k := 0 to band.globalData^.chunkSize - 1 do
+    for k := 0 to High(osrc) do
     begin
       accf := 0.0;
 
       for i := 0 to mixList.Count - 1 do
-        accf += mixList[i].srcData[k];
+        accf += mixList[i].origSrcData[k] * (1 shl (16 - mixList[i].bitRange));
 
-      srcData[k] := accf / mixList.Count;
+      osrc[k] := accf / mixList.Count;
     end;
 
-    ComputeFFT(False);
+    MakeSrcData(@osrc[0]);
+
+    bitRange := 16;
+    dstBitShift := 8;
+
     MakeDstData;
   end;
 end;
@@ -656,11 +644,36 @@ begin
   dstBitShift := bitRange - band.frame.encoder.OutputBitDepth;
 end;
 
+procedure TChunk.MakeSrcData(origData: PDouble);
+var
+  j, k, pos, n: Integer;
+  acc: Double;
+begin
+  for j := 0 to band.globalData^.chunkSize - 1 do
+  begin
+    pos := j * band.globalData^.underSample;
+
+    acc := 0.0;
+    n := 0;
+    for k := 0 to band.globalData^.underSample - 1 do
+    begin
+      if pos + k >= band.frame.SampleCount then
+        Break;
+      acc += origData[pos + k];
+      Inc(n);
+    end;
+
+    if n = 0 then
+      srcData[j] := 0
+    else
+      srcData[j] := acc / n;
+  end;
+end;
+
 procedure TChunk.MakeDstData;
 var
   i: Integer;
 begin
-  ComputeBitRange;
   SetLength(dstData, band.globalData^.chunkSize);
   for i := 0 to band.globalData^.chunkSize - 1 do
     dstData[i] := TEncoder.makeOutputSample(srcData[i], band.frame.encoder.OutputBitDepth, dstBitShift);
@@ -1072,13 +1085,13 @@ begin
 
   if fcl > 0.0 then
   begin
-    coeffs := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True);
+    coeffs := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True, True);
     Result := DoFilter(Result, coeffs);
   end;
 
   if fch < 0.5 then
   begin
-    coeffs := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False);
+    coeffs := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False, True);
     Result := DoFilter(Result, coeffs);
   end;
 end;
@@ -1090,7 +1103,7 @@ begin
 
   BitRate := 128;
   Precision := 7;
-  BandTransFactor := 0.1;
+  BandTransFactor := 0.5;
   LowCut := 32.0;
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
@@ -1296,7 +1309,7 @@ begin
   DoOne(S[0], S[1], True);
 end;
 
-function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass: Boolean): TDoubleDynArray;
+function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass, Windowed: Boolean): TDoubleDynArray;
 var
   sinc, win, sum: Double;
   i, N: Integer;
@@ -1311,13 +1324,26 @@ begin
   for i := 0 to N - 1 do
   begin
     sinc := 2.0 * fc * (i - (N - 1) / 2.0) * pi;
-    if IsZero(sinc) then
+    if sinc = 0 then
       sinc := 1.0
     else
       sinc := sin(sinc) / sinc;
 
-    // blackman window
-    win := 0.42 - 0.5 * cos(2 * pi * i / (N - 1)) + 0.08 * cos(4 * pi * i / (N - 1));
+    win := 1.0;
+    if Windowed then
+    begin
+{$if false}
+      // blackman window
+      win := 7938/18608 - 9240/18608 * cos(2 * pi * i / (N - 1)) + 1430/18608 * cos(4 * pi * i / (N - 1));
+{$else}
+      // sinc window
+      win := (2 * i / (N - 1) - 1) * pi;
+      if win = 0 then
+        win := 1.0
+      else
+        win := sin(win) / win;
+{$endif}
+    end;
 
     Result[i] := sinc * win;
     sum += Result[i];
