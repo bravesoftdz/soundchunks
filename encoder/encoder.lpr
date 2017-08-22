@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 4;
+  BandCount = 3;
   InputSNRDb = -90.3; // 16bit
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
     (0.503, 0.816),
@@ -303,7 +303,7 @@ begin
       compressed := dcc[i] < min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount);
       full := full and not compressed;
 
-      allSz += dcc[i] * bnd.globalData^.chunkSize + Ord(compressed) * bnd.globalData^.chunkCount + SizeOf(Byte);
+      allSz += dcc[i] * bnd.globalData^.chunkSize + (Ord(compressed) * bnd.globalData^.chunkCount) * 3 div 2 +  SizeOf(Word);
     end;
     sz += 0.1;
 
@@ -896,8 +896,8 @@ begin
     // determing low and high bandpass frequencies
 
     hc := min(HighCut, SampleRate / 2);
-    ratioP := log2(LowCut / hc) / BandCount + 0.5;
-    ratioL := hc / SampleRate;
+    ratioP := round(log2(LowCut / hc) / BandCount);
+    ratioL := 0.5;//hc / SampleRate;
 
     if i = 0 then
       bnd.fcl := LowCut / SampleRate
@@ -1103,14 +1103,14 @@ begin
 
   BitRate := 128;
   Precision := 7;
-  BandTransFactor := 0.5;
+  BandTransFactor := 0.1;
   LowCut := 32.0;
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
   OutputBitDepth := 8;
   MinChunkSize := 16;
-  MaxFrameSize:= 7168;
-  MaxChunksPerBand := 128;
+  MaxFrameSize:= 32768;
+  MaxChunksPerBand := 2048;
   UsePython := False;
 
   frames := TFrameList.Create;
@@ -1198,7 +1198,7 @@ var
     ref := Copy(srcData, AIndex * frameSampleCount, frameSampleCount);
     SetLength(ref, frameSampleCount);
     tst := Copy(dstData, AIndex * frameSampleCount, frameSampleCount);
-    results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, False, False, ref, tst);
+    results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, True, False, ref, tst);
   end;
 
 var
@@ -1332,7 +1332,7 @@ begin
     win := 1.0;
     if Windowed then
     begin
-{$if false}
+{$if true}
       // blackman window
       win := 7938/18608 - 9240/18608 * cos(2 * pi * i / (N - 1)) + 1430/18608 * cos(4 * pi * i / (N - 1));
 {$else}
