@@ -29,9 +29,9 @@ type
 
   PBandGlobalData = ^TBandGlobalData;
 
-  { TSecondOrderCIC }
+  { TCICFilter }
 
-  TSecondOrderCIC = class
+  TCICFilter = class
   private
     v, vv, v2: Double;
     R, R2, pos, pos2: Integer;
@@ -41,6 +41,18 @@ type
     SecondOrder: Boolean;
 
     constructor Create(ARatio: Integer; ASecondOrder: Boolean);
+
+    function ProcessSample(Smp: Double): Double;
+  end;
+
+  { TSimpleFilter }
+
+  TSimpleFilter = class
+  private
+    prevSmp: Double;
+    count: Integer;
+  public
+    constructor Create(AFc: Double);
 
     function ProcessSample(Smp: Double): Double;
   end;
@@ -222,6 +234,17 @@ begin
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
 end;
 
+constructor TSimpleFilter.Create(AFc: Double);
+begin
+  count := trunc(sqrt(0.196202 + sqr(AFc)) / AFc);
+end;
+
+function TSimpleFilter.ProcessSample(Smp: Double): Double;
+begin
+  Result := (count * prevSmp + Smp) / (count + 1);
+  prevSmp := Result;
+end;
+
 constructor TFrame.Create(enc: TEncoder; idx: Integer; startSample, endSample: Integer);
 var
   i: Integer;
@@ -342,7 +365,7 @@ begin
     Write('.');
 end;
 
-constructor TSecondOrderCIC.Create(ARatio: Integer; ASecondOrder: Boolean);
+constructor TCICFilter.Create(ARatio: Integer; ASecondOrder: Boolean);
 begin
   SecondOrder := ASecondOrder;
   Ratio := ARatio;
@@ -356,19 +379,21 @@ begin
   pos2 := 0;
 end;
 
-function TSecondOrderCIC.ProcessSample(Smp: Double): Double;
+function TCICFilter.ProcessSample(Smp: Double): Double;
+var
+  smpr: Double;
 begin
-  Smp /= R;
+  smpr := Smp / R;
 
-  v := v + smp - smps[pos];
-  smps[pos] := smp;
+  v := v + smpr - smps[pos];
+  smps[pos] := smpr;
   pos := (pos + 1) mod R;
 
   vv := v / R2;
+
   v2 := v2 + vv - vs[pos2];
   vs[pos2] := vv;
   pos2 := (pos2 + 1) mod R2;
-
 
   Result := ifthen(SecondOrder, v2, v);
 end;
@@ -932,8 +957,9 @@ procedure TEncoder.MakeBandSrcData(AIndex: Integer);
 var
   j: Integer;
   bnd: TBandGlobalData;
-  cic: TSecondOrderCIC;
-  cicSmp, cr1l, cr2l: Double;
+  cic: TCICFilter;
+  hp: TSimpleFilter;
+  smp, cicSmp, cr1l, cr2l: Double;
 begin
   bnd := bandData[AIndex];
 
@@ -950,8 +976,8 @@ begin
 
   if bnd.underSample > 1 then
   begin
-    // compensate for decoder altering the pass band
-    cic := TSecondOrderCIC.Create(bnd.underSample * 2, BandDealiasSecondOrder);
+    // compensate for decoder altering the pass band (low pass)
+    cic := TCICFilter.Create(bnd.underSample * 2, BandDealiasSecondOrder);
 
     cr1l := CICCorrRatio[BandDealiasSecondOrder, 0];
     cr2l := CICCorrRatio[BandDealiasSecondOrder, 1];
@@ -970,6 +996,18 @@ begin
       end;
     finally
       cic.Free;
+    end;
+  end;
+
+  if AIndex > 0 then
+  begin
+    // compensate for decoder altering the pass band (high pass)
+    hp := TSimpleFilter.Create(bnd.underSample * bnd.fcl);
+    try
+      for j := 0 to High(bnd.filteredData) do
+        bnd.filteredData[j] += hp.ProcessSample(bnd.filteredData[j]);
+    finally
+      hp.Free;
     end;
   end;
 
@@ -1127,8 +1165,9 @@ procedure TEncoder.MakeDstData;
 var
   i, j, k, pos, poso: Integer;
   smp: Double;
-  cic: array[0 .. BandCount - 1] of TSecondOrderCIC;
+  cic: array[0 .. BandCount - 1] of TCICFilter;
   offset: array[0 .. BandCount - 1] of Integer;
+  hp: array[0 .. BandCount - 1] of TSimpleFilter;
 begin
   if not (BWSearch or CRSearch) then
     WriteLn('MakeDstData');
@@ -1143,7 +1182,7 @@ begin
 
     if bandData[i].underSample > 1 then
     begin
-      cic[i] := TSecondOrderCIC.Create(bandData[i].underSample * 2, BandDealiasSecondOrder);
+      cic[i] := TCICFilter.Create(bandData[i].underSample * 2, BandDealiasSecondOrder);
       offset[i] := -cic[i].Ratio + 1;
     end
     else
@@ -1151,6 +1190,11 @@ begin
       cic[i] := nil;
       offset[i] := 0;
     end;
+
+    if i > 0 then
+      hp[i] := TSimpleFilter.Create(bandData[i].fcl * bandData[i].underSample)
+    else
+      hp[i] := Nil;
   end;
 
   pos := 0;
@@ -1165,6 +1209,9 @@ begin
           if Assigned(cic[j]) then
             smp := cic[j].ProcessSample(smp);
 
+          if Assigned(hp[j]) then
+            smp -= hp[j].ProcessSample(smp);
+
           poso := pos + offset[j];
           if InRange(poso, 0, High(dstData)) then
           begin
@@ -1177,7 +1224,10 @@ begin
       end;
   finally
     for i := 0 to BandCount - 1 do
+    begin
       cic[i].Free;
+      hp[i].Free;
+    end;
   end;
 end;
 
