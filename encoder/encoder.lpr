@@ -158,7 +158,7 @@ type
     MinChunkSize: Integer;
     MaxFrameSize: Integer;
     MaxChunksPerBand: Integer;
-    UsePython: Boolean;
+    AlternateReduce: Boolean;
 
     SampleRate: Integer;
     SampleCount: Integer;
@@ -406,6 +406,7 @@ begin
   frame := frm;
   index := idx;
   globalData := @frame.encoder.bandData[index];
+  AlternateReduceMethod := frame.encoder.AlternateReduce;
 
   srcData := @globalData^.filteredData[startSample];
 
@@ -468,7 +469,7 @@ var
   end;
 
 var
-  v1, v2: Double;
+  v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
   i, j, prec: Integer;
   chunk: TChunk;
   XY: TReal2DArray;
@@ -479,24 +480,38 @@ begin
 
   //WriteLn('KMeansReduce #', index, ' ', globalData^.desiredChunkCount);
 
-  SetLength(XY, chunks.Count, globalData^.chunkSize * 2);
+  SetLength(XY, chunks.Count, globalData^.chunkSize * 2 + 4);
+  continuityFactor := globalData^.chunkSize / globalData^.chunkSizeUnMin;
 
   for i := 0 to chunks.Count - 1 do
   begin
+    // add first and last sample to features to allow continuity between chunks
+    sl := chunks[i].srcData[0];
+    sh := chunks[i].srcData[globalData^.chunkSize - 1];
+    // add approximate derivatives of first and last sample to features to allow continuity between chunks
+    fdl :=  -1.5 * chunks[i].srcData[0] +
+            2.0 * chunks[i].srcData[1] +
+            -0.5 * chunks[i].srcData[2];
+    fdh :=  1.5 * chunks[i].srcData[globalData^.chunkSize - 1] +
+            -2.0 * chunks[i].srcData[globalData^.chunkSize - 2] +
+            0.5 * chunks[i].srcData[globalData^.chunkSize - 3];
+
+    XY[i, 0] := sl * continuityFactor;
+    XY[i, 1] := sh * continuityFactor;
+    XY[i, 2] := fdl * continuityFactor;
+    XY[i, 3] := fdh * continuityFactor;
+
     for j := 0 to globalData^.chunkSize - 1 do
     begin
       v1 := chunks[i].fft[j].X;
       v2 := chunks[i].fft[j].Y;
 
-      XY[i, j * 2] := v1;
-      XY[i, j * 2 + 1] := v2;
+      XY[i, j * 2 + 4] := v1;
+      XY[i, j * 2 + 5] := v2;
     end;
   end;
 
-  if frame.encoder.UsePython then
-    DoExternalKMeans(XY, desiredChunkCount, 1, prec, AlternateReduceMethod, False, XYC)
-  else
-    KMeansGenerate(XY, Length(XY), Length(XY[0]), desiredChunkCount, prec, i, C, XYC);
+  DoExternalKMeans(XY, desiredChunkCount, 1, prec, AlternateReduceMethod, False, XYC);
 
   reducedChunks.Clear;
   reducedChunks.Capacity := desiredChunkCount;
@@ -905,7 +920,7 @@ begin
     // determing low and high bandpass frequencies
 
     hc := min(HighCut, SampleRate / 2);
-    ratioP := round(log2(LowCut / hc) / BandCount);
+    ratioP := round((log2(LowCut / hc) + 2) / BandCount);
     ratioL := 0.5;//hc / SampleRate;
 
     if i = 0 then
@@ -921,7 +936,7 @@ begin
     // undersample if the band high freq is a lot lower than nyquist
 
     bnd.chunkSize := round(intpower(2.0, floor(-log2(bnd.fcl))));
-    bnd.underSample := round(intpower(2.0, floor(-log2(bnd.fch)) - 2));
+    bnd.underSample := round(intpower(2.0, round(-log2(bnd.fch)) - 2));
     bnd.underSample := Max(1, bnd.underSample);
     bnd.chunkSize := bnd.chunkSize div bnd.underSample;
 
@@ -958,19 +973,18 @@ begin
   for j := SampleCount to frameSampleCount * frameCount - 1 do
     bnd.filteredData[j] := 0;
 
+  cr1l := CICCorrRatio[BandDealiasSecondOrder, 0];
+  cr2l := CICCorrRatio[BandDealiasSecondOrder, 1];
+  if CRSearch then
+  begin
+    cr1l := CR1;
+    cr2l := CR2;
+  end;
+
   if bnd.underSample > 1 then
   begin
     // compensate for decoder altering the pass band (low pass)
     cic := TCICFilter.Create(bnd.underSample * 2, BandDealiasSecondOrder);
-
-    cr1l := CICCorrRatio[BandDealiasSecondOrder, 0];
-    cr2l := CICCorrRatio[BandDealiasSecondOrder, 1];
-    if CRSearch then
-    begin
-      cr1l := CR1;
-      cr2l := CR2;
-    end;
-
     try
       for j := -cic.Ratio + 1 to High(bnd.filteredData) do
       begin
@@ -1133,7 +1147,7 @@ begin
   MinChunkSize := 16;
   MaxFrameSize:= 32768;
   MaxChunksPerBand := 2048;
-  UsePython := False;
+  AlternateReduce := False;
 
   frames := TFrameList.Create;
 end;
@@ -1225,12 +1239,12 @@ type
   end;
 
 const
-  sbw: array[0..12] of TSBW =
+  sbw: array[0..13] of TSBW =
   (
     // per band
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 0),
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 1),
-//    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
     // reference
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -2),
     // combinations
@@ -1320,14 +1334,13 @@ procedure TEncoder.SearchBestCorrRatios;
 
   function DoOne(ACR1, ACR2: Double; Verbose: Boolean): Double;
   begin
-    CR1 := CICCorrRatio[BandDealiasSecondOrder, 0];
-    CR2 := ACR1;
+    CR1 := ACR1;
+    CR2 := ACR2;
 
     PrepareFrames;
     MakeFrames;
     MakeDstData;
-    SaveWAV;
-    Result := -DoExternalEAQUAL(ParamStr(1), ParamStr(2), False, False, 2048);
+    Result := -ComputeEAQUAL(SampleCount, False, False, srcData, dstData);
 
     if Verbose then
       Write(#13'(', FormatFloat('0.00000', CR1), ', ', FormatFloat('0.00000', CR2), ')'#9, FormatFloat('0.00000', Result), '                ');
@@ -1343,16 +1356,17 @@ begin
   CRSearch := True;
 
   H := ifthen(BandDealiasSecondOrder, 1e-4, 1e-4);
-  N := 1;
+  N := 2;
   SetLength(S, N);
-  S[0] := ifthen(BandDealiasSecondOrder, 1.8, 0.5);
+  S[0] := 0.0;
+  S[1] := 0.0;
   MinLBFGSCreate(N, N, S, State);
   MinLBFGSSetCond(State, H, 0.0, 0.0, 0);
   while MinLBFGSIteration(State) do
   begin
     if State.NeedFG then
     begin
-      State.F := DoOne(State.X[0], State.X[0], True);
+      State.F := DoOne(State.X[0], State.X[1], True);
 
 {$if false}
       State.G[0] := (
@@ -1361,10 +1375,20 @@ begin
           -8 * DoOne(State.X[0] - H, State.X[1], False) +
           DoOne(State.X[0] - 2 * H, State.X[1], False)
         ) / (12 * H);
+      State.G[1] := (
+          -DoOne(State.X[0], State.X[1] + 2 * H, False) +
+          8 * DoOne(State.X[0], State.X[1] + H, False) +
+          -8 * DoOne(State.X[0], State.X[1] - H, False) +
+          DoOne(State.X[0], State.X[1] - 2 * H, False)
+        ) / (12 * H);
 {$else}
       State.G[0] := (
           DoOne(State.X[0] + H, State.X[1], False) -
           DoOne(State.X[0] - H, State.X[1], False)
+        ) / (2 * H);
+      State.G[1] := (
+          DoOne(State.X[0], State.X[1] + H, False) -
+          DoOne(State.X[0], State.X[1] - H, False)
         ) / (2 * H);
 {$endif}
     end;
@@ -1598,7 +1622,7 @@ begin
       WriteLn(#9'-mcs'#9'minimum chunk size');
       WriteLn(#9'-sbw'#9'per frame search for best band weighting');
       WriteLn(#9'-v'#9'verbose K-means');
-      WriteLn(#9'-py'#9'use Python script for clustering');
+      WriteLn(#9'-al'#9'use alternate clusering reduce method');
       WriteLn;
       Writeln('(source file must be 16bit mono WAV)');
       WriteLn;
@@ -1616,7 +1640,7 @@ begin
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.MinChunkSize :=  round(ParamValue('-mcs', enc.MinChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
-      enc.UsePython := ParamStart('-py') <> -1;
+      enc.AlternateReduce := ParamStart('-ar') <> -1;
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('Precision = ', enc.Precision);
@@ -1626,7 +1650,7 @@ begin
       WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
       WriteLn('MinChunkSize = ', enc.MinChunkSize);
-      WriteLn('UsePython = ', BoolToStr(enc.UsePython, True));
+      WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
       WriteLn;
 
       enc.Load;
