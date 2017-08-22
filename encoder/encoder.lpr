@@ -100,6 +100,7 @@ type
     rmsPower: Double;
     desiredChunkCount: Integer;
     weight: Double;
+    AlternateReduceMethod: Boolean;
 
     srcData: PDouble;
     dstData: TDoubleDynArray;
@@ -467,7 +468,7 @@ var
   end;
 
 var
-  v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
+  v1, v2: Double;
   i, j, prec: Integer;
   chunk: TChunk;
   XY: TReal2DArray;
@@ -478,39 +479,22 @@ begin
 
   //WriteLn('KMeansReduce #', index, ' ', globalData^.desiredChunkCount);
 
-  SetLength(XY, chunks.Count, globalData^.chunkSize * 2 + 4);
-  continuityFactor := globalData^.chunkSize / globalData^.chunkSizeUnMin;
+  SetLength(XY, chunks.Count, globalData^.chunkSize * 2);
 
   for i := 0 to chunks.Count - 1 do
   begin
-    // add first and last sample to features to allow continuity between chunks
-    sl := chunks[i].srcData[0];
-    sh := chunks[i].srcData[globalData^.chunkSize - 1];
-    // add approximate derivatives of first and last sample to features to allow continuity between chunks
-    fdl :=  -1.5 * chunks[i].srcData[0] +
-            2.0 * chunks[i].srcData[1] +
-            -0.5 * chunks[i].srcData[2];
-    fdh :=  1.5 * chunks[i].srcData[globalData^.chunkSize - 1] +
-            -2.0 * chunks[i].srcData[globalData^.chunkSize - 2] +
-            0.5 * chunks[i].srcData[globalData^.chunkSize - 3];
-
-    XY[i, 0] := sl * continuityFactor;
-    XY[i, 1] := sh * continuityFactor;
-    XY[i, 2] := fdl * continuityFactor;
-    XY[i, 3] := fdh * continuityFactor;
-
     for j := 0 to globalData^.chunkSize - 1 do
     begin
       v1 := chunks[i].fft[j].X;
       v2 := chunks[i].fft[j].Y;
 
-      XY[i, j * 2 + 4] := v1;
-      XY[i, j * 2 + 5] := v2;
+      XY[i, j * 2] := v1;
+      XY[i, j * 2 + 1] := v2;
     end;
   end;
 
   if frame.encoder.UsePython then
-    DoExternalKMeans(XY, desiredChunkCount, 1, prec, False, XYC)
+    DoExternalKMeans(XY, desiredChunkCount, 1, prec, AlternateReduceMethod, False, XYC)
   else
     KMeansGenerate(XY, Length(XY), Length(XY[0]), desiredChunkCount, prec, i, C, XYC);
 
@@ -1232,14 +1216,38 @@ begin
 end;
 
 procedure TEncoder.SearchBestBandWeighting;
+type
+  TSBW = record
+    RMSWeighting: Boolean;
+    BWeighting: Boolean;
+    ApplyPower: Integer;
+    AltMethod: Integer;
+  end;
+
 const
-  TestCount = 11;
-  bwr: array[0..10] of Boolean = (True, True, True, True, True, True, True, False, False, False, False);
-  bwa: array[0..10] of Boolean = (False, False, False, True, True, False, False, False, False, False, True);
-  bwp: array[0..10] of Double = (0, 1, -1, 1, -1, 2, -2, 0, 1, 2, 1);
+  sbw: array[0..12] of TSBW =
+  (
+    // per band
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 0),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 1),
+//    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
+    // reference
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -2),
+    // combinations
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: -1; AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: False; ApplyPower: 1;  AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: False; ApplyPower: -1; AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: -2; AltMethod: -1),
+    (RMSWeighting: False; BWeighting: True;  ApplyPower: 0;  AltMethod: -1),
+    (RMSWeighting: False; BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
+    (RMSWeighting: False; BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
+    (RMSWeighting: False; BWeighting: False; ApplyPower: 1;  AltMethod: -1)
+  );
 
 var
-  results: array[0..TestCount - 1] of TDoubleDynArray;
+  results: array[0..High(sbw)] of TDoubleDynArray;
 
   procedure DoEAQ(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   var
@@ -1252,20 +1260,22 @@ var
   end;
 
 var
-  i, j: Integer;
+  i, j, k: Integer;
   best: Double;
 begin
   BWSearch := True;
   try
-    for i := 0 to TestCount - 1 do
+    for i := 0 to High(sbw) do
     begin
       PrepareFrames;
 
       for j := 0 to frameCount - 1 do
       begin
-        frames[j].BandRMSWeighting := bwr[i];
-        frames[j].BandBWeighting := not bwa[i];
-        frames[j].BandWeightingApplyPower := bwp[i];
+        frames[j].BandRMSWeighting := sbw[i].RMSWeighting;
+        frames[j].BandBWeighting := sbw[i].BWeighting;
+        frames[j].BandWeightingApplyPower := sbw[i].ApplyPower;
+        for k := 0 to BandCount - 1 do
+          frames[j].bands[k].AlternateReduceMethod := (sbw[i].AltMethod = k) or (sbw[i].AltMethod = -1);
       end;
 
       MakeFrames;
@@ -1283,16 +1293,23 @@ begin
 
   for j := 0 to frameCount - 1 do
   begin
+    for i := 0 to BandCount - 1 do
+      frames[j].bands[i].AlternateReduceMethod := results[i, j] > results[BandCount, j];
+
     best := -MaxDouble;
-    for i := 0 to TestCount - 1 do
+    for i := BandCount to High(sbw) do
       if results[i, j] > best then
       begin
         best := results[i, j];
-        frames[j].BandRMSWeighting := bwr[i];
-        frames[j].BandBWeighting := not bwa[i];
-        frames[j].BandWeightingApplyPower := bwp[i];
+        frames[j].BandRMSWeighting := sbw[i].RMSWeighting;
+        frames[j].BandBWeighting := sbw[i].BWeighting;
+        frames[j].BandWeightingApplyPower := sbw[i].ApplyPower;
       end;
-    writeln('#', j, #9, frames[j].BandRMSWeighting, #9, frames[j].BandBWeighting, #9, FloatToStr(frames[j].BandWeightingApplyPower));
+
+    Write('#', j, #9, frames[j].BandRMSWeighting, #9, frames[j].BandBWeighting, #9, FloatToStr(frames[j].BandWeightingApplyPower));
+    for i := 0 to BandCount - 1 do
+      Write(#9, frames[j].bands[i].AlternateReduceMethod);
+    WriteLn;
   end;
 
   MakeFrames;

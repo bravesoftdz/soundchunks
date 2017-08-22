@@ -10,7 +10,7 @@ uses
 type
   TDoubleDynArray2 = array of TDoubleDynArray;
 
-procedure DoExternalKMeans(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount, Precision: Integer; AlternateMethod, PrintProgress: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
 implementation
@@ -129,7 +129,8 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalKMeans(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount, Precision: Integer; AlternateMethod,
+  PrintProgress: Boolean; var XYC: TIntegerDynArray);
 var
   i, j, Clu, Inp, st: Integer;
   InFN, Line, Output, ErrOut: String;
@@ -172,6 +173,8 @@ begin
     Process.Parameters.Add('-i "' + InFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)));
     if PrintProgress then
       Process.Parameters.Add('-d');
+    if AlternateMethod then
+      Process.Parameters.Add('-a');
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
