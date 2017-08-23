@@ -8,8 +8,8 @@ const
   BandCount = 3;
   InputSNRDb = -90.3; // 16bit
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
-    (0.503, 0.816),
-    (1.006, 0.949)
+    (0.93349, 1.06550),
+    (2.05288, 1.97000)
   );
 
 type
@@ -33,14 +33,14 @@ type
 
   TCICFilter = class
   private
-    v, vv, v2: Double;
-    R, R2, pos, pos2: Integer;
-    smps, vs: TDoubleDynArray;
+    R, pos: Integer;
+    integrator: TDoubleDynArray;
+    comb: TDoubleDynArray2;
   public
     Ratio: Integer;
-    SecondOrder: Boolean;
+    Stages: Integer;
 
-    constructor Create(ARatio: Integer; ASecondOrder: Boolean);
+    constructor Create(ARatio: Integer; AStages: Integer);
 
     function ProcessSample(Smp: Double): Double;
   end;
@@ -366,39 +366,37 @@ begin
     Write('.');
 end;
 
-constructor TCICFilter.Create(ARatio: Integer; ASecondOrder: Boolean);
+constructor TCICFilter.Create(ARatio: Integer; AStages: Integer);
 begin
-  SecondOrder := ASecondOrder;
+  Stages := AStages;
   Ratio := ARatio;
   R := max(1, ARatio);
-  R2 := R div 2;
-  SetLength(smps, R);
-  SetLength(vs, R2);
-  v := 0;
-  v2 := 0;
+  SetLength(comb, Stages, R);
+  SetLength(integrator, Stages);
   pos := 0;
-  pos2 := 0;
 end;
 
 function TCICFilter.ProcessSample(Smp: Double): Double;
 var
-  smpr: Double;
+  i: Integer;
 begin
-  smpr := Smp / R;
+  for i := 0 to Stages - 1 do
+  begin
+    Result := Smp - comb[i, pos];
+    comb[i, pos] := Smp;
+    Smp := Result;
+  end;
 
-  v := v + smpr - smps[pos];
-  smps[pos] := smpr;
   pos := (pos + 1) mod R;
 
-  vv := v / R2;
+  for i := 0 to Stages - 1 do
+  begin
+    integrator[i] := integrator[i] + Result;
+    Result := integrator[i];
+  end;
 
-  v2 := v2 + vv - vs[pos2];
-  vs[pos2] := vv;
-  pos2 := (pos2 + 1) mod R2;
-
-  Result := ifthen(SecondOrder, v2, v);
+  Result /= intpower(R, Stages);
 end;
-
 
 constructor TBand.Create(frm: TFrame; idx: Integer; startSample, endSample: Integer);
 var i: Integer;
@@ -545,6 +543,7 @@ begin
     for j := 0 to globalData^.chunkSize - 1 do
     begin
       smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.OutputBitDepth, chunk.dstBitShift);
+
       for k := 0 to globalData^.underSample - 1 do
       begin
         if InRange(pos, 0, High(dstData)) then
@@ -936,7 +935,7 @@ begin
     // undersample if the band high freq is a lot lower than nyquist
 
     bnd.chunkSize := round(intpower(2.0, floor(-log2(bnd.fcl))));
-    bnd.underSample := round(intpower(2.0, round(-log2(bnd.fch)) - 2));
+    bnd.underSample := round(intpower(2.0, round(-log2(bnd.fch)) - 1));
     bnd.underSample := Max(1, bnd.underSample);
     bnd.chunkSize := bnd.chunkSize div bnd.underSample;
 
@@ -984,7 +983,7 @@ begin
   if bnd.underSample > 1 then
   begin
     // compensate for decoder altering the pass band (low pass)
-    cic := TCICFilter.Create(bnd.underSample * 2, BandDealiasSecondOrder);
+    cic := TCICFilter.Create(bnd.underSample, 1 + Ord(BandDealiasSecondOrder));
     try
       for j := -cic.Ratio + 1 to High(bnd.filteredData) do
       begin
@@ -1180,7 +1179,7 @@ begin
 
     if bandData[i].underSample > 1 then
     begin
-      cic[i] := TCICFilter.Create(bandData[i].underSample * 2, BandDealiasSecondOrder);
+      cic[i] := TCICFilter.Create(bandData[i].underSample, 1 + Ord(BandDealiasSecondOrder));
       offset[i] := -cic[i].Ratio + 1;
     end
     else
@@ -1246,7 +1245,7 @@ const
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 1),
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
     // reference
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -2),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -1),
     // combinations
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: -1; AltMethod: -1),
@@ -1289,7 +1288,7 @@ begin
         frames[j].BandBWeighting := sbw[i].BWeighting;
         frames[j].BandWeightingApplyPower := sbw[i].ApplyPower;
         for k := 0 to BandCount - 1 do
-          frames[j].bands[k].AlternateReduceMethod := (sbw[i].AltMethod = k) or (sbw[i].AltMethod = -1);
+          frames[j].bands[k].AlternateReduceMethod := sbw[i].AltMethod = k;
       end;
 
       MakeFrames;
@@ -1355,11 +1354,11 @@ var
 begin
   CRSearch := True;
 
-  H := ifthen(BandDealiasSecondOrder, 1e-4, 1e-4);
+  H := 1e-4;
   N := 2;
   SetLength(S, N);
-  S[0] := 0.0;
-  S[1] := 0.0;
+  S[0] := 1.0 + 1.0 * Ord(BandDealiasSecondOrder);
+  S[1] := S[0];
   MinLBFGSCreate(N, N, S, State);
   MinLBFGSSetCond(State, H, 0.0, 0.0, 0);
   while MinLBFGSIteration(State) do
