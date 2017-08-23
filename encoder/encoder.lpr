@@ -8,8 +8,8 @@ const
   BandCount = 3;
   InputSNRDb = -90.3; // 16bit
   CICCorrRatio: array[Boolean{2nd order?}, 0..1] of Double = (
-    (0.93349, 1.06550),
-    (2.05288, 1.97000)
+    (1.0, 1.0),
+    (2.0, 2.0)
   );
 
 type
@@ -49,10 +49,13 @@ type
 
   TSimpleFilter = class
   private
-    prevSmp: Double;
-    count: Integer;
+    prevSmp: TDoubleDynArray;
   public
-    constructor Create(AFc: Double);
+    Count: Integer;
+    Stages: Integer;
+    Lag: Integer;
+
+    constructor Create(AFc: Double; AStages: Integer);
 
     function ProcessSample(Smp: Double): Double;
   end;
@@ -75,16 +78,16 @@ type
 
     origSrcData: PDouble;
     srcData: TDoubleDynArray;
-    fft: TComplex1DArray;
+    dct: TDoubleDynArray;
     dstData: TByteDynArray;
 
     constructor Create(bnd: TBand; idx: Integer);
     destructor Destroy; override;
 
-    procedure ComputeFFT(FromDstData: Boolean);
+    procedure ComputeDCT(FromDstData: Boolean);
     procedure InitMix;
     procedure AddToMix(chk: TChunk);
-    procedure FinalizeMix(IntoDstData: Boolean);
+    procedure FinalizeMix;
     procedure ComputeBitRange;
     procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
@@ -235,15 +238,25 @@ begin
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
 end;
 
-constructor TSimpleFilter.Create(AFc: Double);
+constructor TSimpleFilter.Create(AFc: Double; AStages: Integer);
 begin
-  count := trunc(sqrt(0.196202 + sqr(AFc)) / AFc);
+  Stages := AStages;
+  AFc *= Stages;
+  Count := trunc(sqrt(0.196202 + sqr(AFc)) / AFc);
+  Lag := (Count + 1) div 2;
+  SetLength(prevSmp, Stages);
 end;
 
 function TSimpleFilter.ProcessSample(Smp: Double): Double;
+var
+  i: Integer;
 begin
-  Result := (count * prevSmp + Smp) / (count + 1);
-  prevSmp := Result;
+  Result := Smp;
+  for i := 0 to Stages - 1 do
+  begin
+    Result := (Count * prevSmp[i] + Result) / (Count + 1);
+    prevSmp[i] := Result;
+  end;
 end;
 
 constructor TFrame.Create(enc: TEncoder; idx: Integer; startSample, endSample: Integer);
@@ -327,7 +340,7 @@ begin
       compressed := dcc[i] < min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount);
       full := full and not compressed;
 
-      allSz += dcc[i] * bnd.globalData^.chunkSize + (Ord(compressed) * bnd.globalData^.chunkCount) * 3 div 2 +  SizeOf(Word);
+      allSz += dcc[i] * bnd.globalData^.chunkSize + (Ord(compressed) * bnd.globalData^.chunkCount) * 3 div 2 + SizeOf(Word);
     end;
     sz += 0.1;
 
@@ -439,7 +452,7 @@ begin
     chunk.ComputeBitRange;
     chunk.MakeDstData;
     if not frame.encoder.CRSearch then
-      chunk.ComputeFFT(False);
+      chunk.ComputeDCT(False);
     chunks.Add(chunk);
   end;
 end;
@@ -463,51 +476,24 @@ var
         chunks[i].reducedChunk := reducedChunk;
       end;
 
-    reducedChunk.FinalizeMix(True);
+    reducedChunk.FinalizeMix;
   end;
 
 var
-  v1, v2, continuityFactor, sl, sh, fdl, fdh: Double;
   i, j, prec: Integer;
   chunk: TChunk;
   XY: TReal2DArray;
-  C: TReal2DArray;
 begin
   prec := frame.encoder.Precision;
   if (prec = 0) or (desiredChunkCount = globalData^.chunkCount) then Exit;
 
   //WriteLn('KMeansReduce #', index, ' ', globalData^.desiredChunkCount);
 
-  SetLength(XY, chunks.Count, globalData^.chunkSize * 2 + 4);
-  continuityFactor := globalData^.chunkSize / globalData^.chunkSizeUnMin;
+  SetLength(XY, chunks.Count, globalData^.chunkSize);
 
   for i := 0 to chunks.Count - 1 do
-  begin
-    // add first and last sample to features to allow continuity between chunks
-    sl := chunks[i].srcData[0];
-    sh := chunks[i].srcData[globalData^.chunkSize - 1];
-    // add approximate derivatives of first and last sample to features to allow continuity between chunks
-    fdl :=  -1.5 * chunks[i].srcData[0] +
-            2.0 * chunks[i].srcData[1] +
-            -0.5 * chunks[i].srcData[2];
-    fdh :=  1.5 * chunks[i].srcData[globalData^.chunkSize - 1] +
-            -2.0 * chunks[i].srcData[globalData^.chunkSize - 2] +
-            0.5 * chunks[i].srcData[globalData^.chunkSize - 3];
-
-    XY[i, 0] := sl * continuityFactor;
-    XY[i, 1] := sh * continuityFactor;
-    XY[i, 2] := fdl * continuityFactor;
-    XY[i, 3] := fdh * continuityFactor;
-
     for j := 0 to globalData^.chunkSize - 1 do
-    begin
-      v1 := chunks[i].fft[j].X;
-      v2 := chunks[i].fft[j].Y;
-
-      XY[i, j * 2 + 4] := v1;
-      XY[i, j * 2 + 5] := v2;
-    end;
-  end;
+      XY[i, j] := chunks[i].dct[j];
 
   DoExternalKMeans(XY, desiredChunkCount, 1, prec, AlternateReduceMethod, False, XYC);
 
@@ -579,23 +565,24 @@ begin
   inherited Destroy;
 end;
 
-procedure TChunk.ComputeFFT(FromDstData: Boolean);
+procedure TChunk.ComputeDCT(FromDstData: Boolean);
 var
   i: Integer;
-  ffb: TReal1DArray;
+  data: TDoubleDynArray;
 begin
-  SetLength(ffb, band.globalData^.chunkSize);
+  SetLength(data, band.globalData^.chunkSize);
   if FromDstData then
   begin
-    for i := 0 to High(ffb) do
-      ffb[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
+    for i := 0 to High(data) do
+      data[i] := (Integer(dstData[i]) + Low(ShortInt)) / High(ShortInt);
   end
   else
   begin
-    for i := 0 to High(ffb) do
-      ffb[i] := srcData[i] * (1 shl (16 - bitRange));
+    for i := 0 to High(data) do
+      data[i] := srcData[i] * (1 shl (16 - bitRange));
   end;
-  FFTR1D(ffb, band.globalData^.chunkSize, fft);
+
+  dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
 procedure TChunk.InitMix;
@@ -608,51 +595,23 @@ begin
   mixList.Add(chk);
 end;
 
-procedure TChunk.FinalizeMix(IntoDstData: Boolean);
+procedure TChunk.FinalizeMix;
 var
-  i, k, sz: Integer;
-  acc: Integer;
-  accf: Double;
-  osrc: TDoubleDynArray;
+  i, k, acc: Integer;
 begin
   if not Assigned(mixList) or (mixList.Count = 0) then
     Exit;
 
-  if IntoDstData then
+  SetLength(dstData, band.globalData^.chunkSize);
+
+  for k := 0 to band.globalData^.chunkSize - 1 do
   begin
-    SetLength(dstData, band.globalData^.chunkSize);
+    acc := 0;
 
-    for k := 0 to band.globalData^.chunkSize - 1 do
-    begin
-      acc := 0;
+    for i := 0 to mixList.Count - 1 do
+      acc += mixList[i].dstData[k];
 
-      for i := 0 to mixList.Count - 1 do
-        acc += mixList[i].dstData[k];
-
-      dstData[k] := acc div mixList.Count;
-    end;
-  end
-  else
-  begin
-    sz := band.globalData^.chunkSize * band.globalData^.underSample * 2;
-    SetLength(osrc, sz * 3);
-
-    for k := 0 to High(osrc) do
-    begin
-      accf := 0.0;
-
-      for i := 0 to mixList.Count - 1 do
-        accf += mixList[i].origSrcData[k] * (1 shl (16 - mixList[i].bitRange));
-
-      osrc[k] := accf / mixList.Count;
-    end;
-
-    MakeSrcData(@osrc[0]);
-
-    bitRange := 16;
-    dstBitShift := 8;
-
-    MakeDstData;
+    dstData[k] := acc div mixList.Count;
   end;
 end;
 
@@ -919,7 +878,7 @@ begin
     // determing low and high bandpass frequencies
 
     hc := min(HighCut, SampleRate / 2);
-    ratioP := round((log2(LowCut / hc) + 2) / BandCount);
+    ratioP := (7 - log2(hc)) / BandCount;
     ratioL := 0.5;//hc / SampleRate;
 
     if i = 0 then
@@ -935,7 +894,7 @@ begin
     // undersample if the band high freq is a lot lower than nyquist
 
     bnd.chunkSize := round(intpower(2.0, floor(-log2(bnd.fcl))));
-    bnd.underSample := round(intpower(2.0, round(-log2(bnd.fch)) - 1));
+    bnd.underSample := round(intpower(2.0, round(-log2(bnd.fch)) - 2));
     bnd.underSample := Max(1, bnd.underSample);
     bnd.chunkSize := bnd.chunkSize div bnd.underSample;
 
@@ -983,7 +942,7 @@ begin
   if bnd.underSample > 1 then
   begin
     // compensate for decoder altering the pass band (low pass)
-    cic := TCICFilter.Create(bnd.underSample, 1 + Ord(BandDealiasSecondOrder));
+    cic := TCICFilter.Create(bnd.underSample * 2, 1 + Ord(BandDealiasSecondOrder));
     try
       for j := -cic.Ratio + 1 to High(bnd.filteredData) do
       begin
@@ -999,7 +958,7 @@ begin
   if AIndex > 0 then
   begin
     // compensate for decoder altering the pass band (high pass)
-    hp := TSimpleFilter.Create(bnd.underSample * bnd.fcl);
+    hp := TSimpleFilter.Create(bnd.underSample * bnd.fcl, 2);
     try
       for j := 0 to High(bnd.filteredData) do
         bnd.filteredData[j] += hp.ProcessSample(bnd.filteredData[j]);
@@ -1165,6 +1124,7 @@ var
   cic: array[0 .. BandCount - 1] of TCICFilter;
   offset: array[0 .. BandCount - 1] of Integer;
   hp: array[0 .. BandCount - 1] of TSimpleFilter;
+  bnd: TBandGlobalData;
 begin
   if not (BWSearch or CRSearch) then
     WriteLn('MakeDstData');
@@ -1174,12 +1134,14 @@ begin
 
   for i := 0 to BandCount - 1 do
   begin
-    SetLength(bandData[i].dstData, Length(dstData));
-    FillWord(bandData[i].dstData[0], Length(dstData), 0);
+    bnd := bandData[i];
 
-    if bandData[i].underSample > 1 then
+    SetLength(bnd.dstData, Length(dstData));
+    FillWord(bnd.dstData[0], Length(dstData), 0);
+
+    if bnd.underSample > 1 then
     begin
-      cic[i] := TCICFilter.Create(bandData[i].underSample, 1 + Ord(BandDealiasSecondOrder));
+      cic[i] := TCICFilter.Create(bnd.underSample * 2, 1 + Ord(BandDealiasSecondOrder));
       offset[i] := -cic[i].Ratio + 1;
     end
     else
@@ -1189,9 +1151,11 @@ begin
     end;
 
     if i > 0 then
-      hp[i] := TSimpleFilter.Create(bandData[i].fcl * bandData[i].underSample)
+      hp[i] := TSimpleFilter.Create(bnd.fcl * bnd.underSample, 2)
     else
       hp[i] := Nil;
+
+    bandData[i] := bnd;
   end;
 
   pos := 0;
