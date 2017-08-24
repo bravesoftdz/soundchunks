@@ -196,7 +196,6 @@ type
     procedure SaveBandWAV(index: Integer; fn: String);
 
     procedure MakeBandGlobalData;
-    procedure MakeBandGlobalData2;
     procedure MakeBandSrcData(AIndex: Integer);
 
     procedure PrepareFrames;
@@ -1002,7 +1001,8 @@ begin
   // pass 2
   projectedByteSize := MaxFrameSize * frameCount;
 
-  MakeBandGlobalData2;
+  for i := 0 to BandCount - 1 do
+    bandData[i].chunkCount := (frameSampleCount - 1) div bandData[i].chunkSize + 1;
 
   if verbose and not (BWSearch or CRSearch) then
   begin
@@ -1028,20 +1028,6 @@ begin
     frames.Add(frm);
   end;
 end;
-
-procedure TEncoder.MakeBandGlobalData2;
-var
-  i: Integer;
-  bnd: TBandGlobalData;
-begin
-  for i := 0 to BandCount - 1 do
-  begin
-    bnd := bandData[i];
-    bnd.chunkCount := (frameSampleCount - 1) div bnd.chunkSize + 1;
-    bandData[i] := bnd;
-  end;
-end;
-
 
 procedure TEncoder.MakeFrames;
 
