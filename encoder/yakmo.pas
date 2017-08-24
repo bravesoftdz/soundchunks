@@ -81,7 +81,7 @@ begin
               Inc(StderrBytesRead, StderrNumBytes);
           end
         else
-          Sleep(20);
+          Sleep(10);
       end;
 
     if PrintOut then
