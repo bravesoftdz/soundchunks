@@ -112,7 +112,7 @@
         <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -py -v -pr0"/>
       </local>
     </RunParams>
-    <Units Count="3">
+    <Units Count="4">
       <Unit0>
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -125,6 +125,10 @@
         <Filename Value="anysort.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit2>
+      <Unit3>
+        <Filename Value="alglib\conv.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit3>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
