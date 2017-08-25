@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 2;
+  BandCount = 3;
   InputSNRDb = -90.3; // 16bit
 
 type
@@ -16,6 +16,7 @@ type
 
   TBandGlobalData = record
     fcl, fch: Double;
+    underSample: Integer;
     chunkSize: Integer;
     chunkCount: Integer;
     filteredData: TDoubleDynArray;
@@ -291,7 +292,7 @@ var
   i, allSz: Integer;
   sz, dbh: Double;
   wgt, fsq: Double;
-  full, compressed: Boolean;
+  full: Boolean;
   bnd: TBand;
   s: String;
   dcc: array[0..BandCount - 1] of Integer;
@@ -323,10 +324,6 @@ begin
   allSz := 0;
   sz := 1;
   repeat
-    FrameSize := allSz;
-    for i := 0 to BandCount - 1 do
-      bands[i].desiredChunkCount := dcc[i];
-
     full := True;
     allSz := 0;
     for i := 0 to BandCount - 1 do
@@ -336,21 +333,20 @@ begin
       dcc[i] := round(sz * bnd.weight);
       dcc[i] := EnsureRange(dcc[i], 1, min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount));
 
-      compressed := dcc[i] < min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount);
-      full := full and not compressed;
+      full := full and not (dcc[i] < min(encoder.MaxChunksPerBand, bnd.globalData^.chunkCount));
 
       allSz += dcc[i] * bnd.globalData^.chunkSize + bnd.globalData^.chunkCount * SizeOf(Byte) + SizeOf(Word);
     end;
+
+    if allSz <= encoder.MaxFrameSize then
+    begin
+      FrameSize := allSz;
+      for i := 0 to BandCount - 1 do
+        bands[i].desiredChunkCount := dcc[i];
+    end;
+
     sz += 0.1;
-
-  until (allSz > encoder.MaxFrameSize) or full;
-
-  if full then
-  begin
-    FrameSize := allSz;
-    for i := 0 to BandCount - 1 do
-      bands[i].desiredChunkCount := dcc[i];
-  end;
+  until full;
 
   if encoder.verbose and not (encoder.BWSearch or encoder.CRSearch) then
   begin
@@ -538,7 +534,7 @@ end;
 
 procedure TBand.MakeDstData;
 var
-  i, j, pos: Integer;
+  i, j, k, pos: Integer;
   chunk: TChunk;
   smp: Double;
 begin
@@ -557,9 +553,13 @@ begin
     for j := 0 to globalData^.chunkSize - 1 do
     begin
       smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.StoredBitDepth, chunk.dstBitShift);
-      if InRange(pos, 0, High(dstData)) then
-        dstData[pos] := smp;
-      Inc(pos);
+
+      for k := 0 to globalData^.underSample - 1 do
+      begin
+        if InRange(pos, 0, High(dstData)) then
+          dstData[pos] := smp;
+        Inc(pos);
+      end;
     end;
   end;
 end;
@@ -573,7 +573,7 @@ begin
 
   SetLength(srcData, band.globalData^.chunkSize);
 
-  origSrcData := @band.srcData[idx * band.globalData^.chunkSize];
+  origSrcData := @band.srcData[idx * band.globalData^.chunkSize * band.globalData^.underSample];
 
   MakeSrcData(origSrcData);
 
@@ -653,19 +653,22 @@ end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
 var
-  j, pos, n: Integer;
+  j, k, pos, n: Integer;
   acc: Double;
 begin
   for j := 0 to band.globalData^.chunkSize - 1 do
   begin
-    pos := j;
+    pos := j * band.globalData^.underSample;
 
     acc := 0.0;
     n := 0;
-    if pos >= band.frame.SampleCount then
-      Break;
-    acc += origData[pos];
-    Inc(n);
+    for k := 0 to band.globalData^.underSample - 1 do
+    begin
+      if pos + k >= band.frame.SampleCount then
+        Break;
+      acc += origData[pos + k];
+      Inc(n);
+    end;
 
     if n = 0 then
       srcData[j] := 0
@@ -755,7 +758,7 @@ end;
 
 procedure TEncoder.SaveStream(AStream: TStream);
 var
-  i, j, k, cnt: Integer;
+  i, j, k: Integer;
   ms: TMemoryStream;
   ptr: PByte;
   b, pb : Integer;
@@ -775,14 +778,10 @@ begin
           cl := frames[i].bands[j].chunks;
         ms.WriteWord(cl.Count);
 
-        cnt := 0;
         for k := 0 to cl.Count - 1 do
         begin
-          if cl[k].mixList.Count <= 1 then
-            Inc(cnt);
           ms.WriteBuffer(cl[k].dstData[0], bandData[j].chunkSize);
         end;
-        WriteLn(cnt);
       end;
 
       for j := 0 to BandCount - 1 do
@@ -793,7 +792,7 @@ begin
           b := frames[i].bands[j].chunks[k].dstBitShift;
           if b <> pb then
           begin
-            ms.WriteByte(256 - StoredBitDepth + b);
+            ms.WriteByte(255 - StoredBitDepth + b);
             pb := b;
           end;
 
@@ -801,7 +800,6 @@ begin
         end;
       end;
 
-      writeln(ms.Size);
       ms.Position := 0;
       AStream.WriteWord(ms.Size);
       AStream.CopyFrom(ms, ms.Size);
@@ -856,6 +854,10 @@ begin
       bnd.fch := power(2.0, (BandCount - 1 - i) * ratioP) * ratioL;
 
     bnd.chunkSize := minChunkSize;
+
+    // undersample if the band high freq is a lot lower than nyquist
+
+    bnd.underSample := Max(1, round(0.125 / bnd.fch));
 
     bandData[i] := bnd;
   end;
@@ -933,12 +935,12 @@ begin
 
   blockSampleCount := 0;
   for i := 0 to BandCount - 1 do
-    if bandData[i].chunkSize > blockSampleCount then
-      blockSampleCount := bandData[i].chunkSize;
+    if bandData[i].underSample > blockSampleCount then
+      blockSampleCount := bandData[i].underSample * bandData[i].chunkSize;
 
   blockChunkCount := 0;
   for i := 0 to BandCount - 1 do
-    blockChunkCount += blockSampleCount div bandData[i].chunkSize;
+    blockChunkCount += blockSampleCount div (bandData[i].underSample * bandData[i].chunkSize);
 
   // pass 1
   projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
@@ -950,7 +952,7 @@ begin
   projectedByteSize := MaxFrameSize * frameCount;
 
   for i := 0 to BandCount - 1 do
-    bandData[i].chunkCount := (frameSampleCount - 1) div bandData[i].chunkSize + 1;
+    bandData[i].chunkCount := (frameSampleCount - 1) div (bandData[i].chunkSize * bandData[i].underSample) + 1;
 
   if verbose and not (BWSearch or CRSearch) then
   begin
@@ -962,7 +964,7 @@ begin
 
   if not (BWSearch or CRSearch) then
     for i := 0 to BandCount - 1 do
-       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount);
+       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].chunkSize, ' * ', bandData[i].chunkCount, '; ', bandData[i].underSample);
 
   ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
 
@@ -1039,7 +1041,7 @@ begin
   StoredBitDepth := 8;
   OutputBitDepth := 16;
   MinChunkSize := 8;
-  MaxFrameSize:= 16 * 1024;
+  MaxFrameSize:= 32 * 1024;
   AlternateReduce := False;
 
   BandBoundsOffset := 8;
@@ -1139,25 +1141,25 @@ type
   end;
 
 const
-  sbw: array[0..12] of TSBW =
+  sbw: array[0..3] of TSBW =
   (
     // per band
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 0),
     (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 1),
-    //(RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
     // reference
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -1),
+    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -1)
     // combinations
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: -1; AltMethod: -1),
-    (RMSWeighting: True;  BWeighting: False; ApplyPower: 1;  AltMethod: -1),
-    (RMSWeighting: True;  BWeighting: False; ApplyPower: -1; AltMethod: -1),
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: -2; AltMethod: -1),
-    (RMSWeighting: False; BWeighting: True;  ApplyPower: 0;  AltMethod: -1),
-    (RMSWeighting: False; BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
-    (RMSWeighting: False; BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
-    (RMSWeighting: False; BWeighting: False; ApplyPower: 1;  AltMethod: -1)
+    //(RMSWeighting: True;  BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
+    //(RMSWeighting: True;  BWeighting: True;  ApplyPower: -1; AltMethod: -1),
+    //(RMSWeighting: True;  BWeighting: False; ApplyPower: 1;  AltMethod: -1),
+    //(RMSWeighting: True;  BWeighting: False; ApplyPower: -1; AltMethod: -1),
+    //(RMSWeighting: True;  BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
+    //(RMSWeighting: True;  BWeighting: True;  ApplyPower: -2; AltMethod: -1),
+    //(RMSWeighting: False; BWeighting: True;  ApplyPower: 0;  AltMethod: -1),
+    //(RMSWeighting: False; BWeighting: True;  ApplyPower: 1;  AltMethod: -1),
+    //(RMSWeighting: False; BWeighting: True;  ApplyPower: 2;  AltMethod: -1),
+    //(RMSWeighting: False; BWeighting: False; ApplyPower: 1;  AltMethod: -1)
   );
 
 var
@@ -1499,7 +1501,8 @@ begin
       enc.SaveWAV;
       for i := 0 to BandCount - 1 do
         enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
-      enc.SaveRSC;
+      if enc.Precision > 0 then
+        enc.SaveRSC;
 
       enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
 
