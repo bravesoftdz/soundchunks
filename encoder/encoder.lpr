@@ -158,7 +158,7 @@ type
 
     SampleRate: Integer;
     SampleCount: Integer;
-    projectedByteSize, frameCount, frameSampleCount: Integer;
+    projectedByteSize, frameCount: Integer;
     verbose: Boolean;
 
     BWSearch, CRSearch: Boolean;
@@ -259,8 +259,13 @@ var
 begin
   encoder := enc;
   index := idx;
-  ChunkCount := (endSample - startSample) div encoder.ChunkSize + 1;
-  SampleCount := encoder.frameSampleCount;
+  ChunkCount := (endSample - startSample + 1 - 1) div encoder.ChunkSize + 1;
+  SampleCount := endSample - startSample + 1;
+
+  if encoder.verbose and not (encoder.BWSearch or encoder.CRSearch) then
+  begin
+    WriteLn('Frame #', index, #9, ChunkCount);
+  end;
 
   for i := 0 to BandCount - 1 do
     bands[i] := TBand.Create(Self, i, startSample, endSample);
@@ -376,6 +381,8 @@ begin
   for i := 0 to frame.chunkCount - 1 do
   begin
     chunk := TChunk.Create(Self, i);
+    chunk.ComputeBitRange;
+    chunk.MakeDstData;
     if not frame.encoder.CRSearch then
       chunk.ComputeDCT;
     chunks.Add(chunk);
@@ -700,7 +707,7 @@ begin
 
         for k := 0 to cl.Count - 1 do
         begin
-          if k and 7 = 0 then
+          if (k and 7 = 0) and (ChunksPerBand > 256) then
           begin
             b := 0;
             for l := k to k + 7 do
@@ -792,10 +799,7 @@ begin
 
   // band pass the samples
   bnd.filteredData := DoBPFilter(bnd.fcl, bnd.fch, BandTransFactor, bnd.filteredData);
-  SetLength(bnd.filteredData, frameSampleCount * frameCount);
-
-  for j := SampleCount to frameSampleCount * frameCount - 1 do
-    bnd.filteredData[j] := 0;
+  SetLength(bnd.filteredData, SampleCount);
 
   if AIndex < BandCount - 1 then
   begin
@@ -840,42 +844,38 @@ procedure TEncoder.PrepareFrames;
   end;
 
 var
-  i, blockSampleCount, frameChunkCount, curStart, curEnd, fixedCost, frameCost: Integer;
+  i, j, k, blockSampleCount, fixedCost, frameCost, nextStart: Integer;
   frm: TFrame;
+  totalPower, perFramePower, curPower: Double;
 begin
   MakeBandGlobalData;
+
+  // pass 1
 
   blockSampleCount := 0;
   for i := 0 to BandCount - 1 do
     if bandData[i].underSample > blockSampleCount then
       blockSampleCount := bandData[i].underSample * ChunkSize;
 
-  // pass 1
   projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
 
   fixedCost := 0;
   frameCost := 0;
   for i := 0 to BandCount - 1 do
   begin
-    fixedCost += (SampleCount * 9) div (8 * ChunkSize) + SizeOf(Word);
+    fixedCost += (SampleCount * round(log2(ChunksPerBand))) div (8 * ChunkSize) + SizeOf(Word);
     frameCost += ChunksPerBand * ChunkSize;
     frameCost += ChunksPerBand div 2;
   end;
 
   frameCount := (projectedByteSize - fixedCost - 1) div frameCost + 1;
 
-  frameSampleCount := (SampleCount - 1) div frameCount + 1;
-  frameSampleCount := ((frameSampleCount - 1) div blockSampleCount + 1) * blockSampleCount;
-
-  frameChunkCount := (frameSampleCount - 1) div ChunkSize + 1;
   projectedByteSize := fixedCost + frameCount * frameCost;
 
   if verbose and not (BWSearch or CRSearch) then
   begin
     writeln('FrameSize = ', projectedByteSize div frameCount);
     writeln('FrameCount = ', frameCount);
-    writeln('FrameSampleCount = ', frameSampleCount);
-    writeln('FrameChunkCount = ', frameChunkCount);
     writeln('ProjectedByteSize = ', projectedByteSize);
     writeln('ChunkSize = ', ChunkSize);
   end;
@@ -886,15 +886,43 @@ begin
 
   ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
 
-  frames.Clear;
-  for i := 0 to frameCount - 1 do
-  begin
-    curStart := i * frameSampleCount;
-    curEnd := min(SampleCount, (i + 1) * frameSampleCount) - 1;
+  // pass 2
 
-    frm := TFrame.Create(Self, i, curStart, curEnd);
-    frames.Add(frm);
+  totalPower := 0.0;
+  for j := 0 to BandCount - 1 do
+    for i := 0 to SampleCount - 1 do
+      totalPower += sqr(bandData[j].filteredData[i]);
+
+  perFramePower := sqrt(totalPower / frameCount);
+  totalPower := sqrt(totalPower);
+
+  if verbose and not (BWSearch or CRSearch) then
+  begin
+    writeln('TotalPower = ', FloatToStr(totalPower));
+    writeln('PerFramePower = ', FloatToStr(perFramePower));
   end;
+
+  k := 0;
+  nextStart := 0;
+  curPower := 0.0;
+  for i := 0 to SampleCount - 1 do
+  begin
+    for j := 0 to BandCount - 1 do
+      curPower += sqr(bandData[j].filteredData[i]);
+
+    if (i mod ChunkSize = 0) and (sqrt(curPower) >= perFramePower) then
+    begin
+      frm := TFrame.Create(Self, k, nextStart, i - 1);
+      frames.Add(frm);
+
+      curPower := 0.0;
+      nextStart := i;
+      Inc(k);
+    end;
+  end;
+
+  frm := TFrame.Create(Self, k, nextStart, SampleCount - 1);
+  frames.Add(frm);
 end;
 
 procedure TEncoder.MakeFrames;
@@ -986,7 +1014,7 @@ begin
   if not (BWSearch or CRSearch) then
     WriteLn('MakeDstData');
 
-  SetLength(dstData, frameSampleCount * frames.Count);
+  SetLength(dstData, SampleCount);
   FillWord(dstData[0], Length(dstData), 0);
 
   for i := 0 to BandCount - 1 do
@@ -1076,15 +1104,14 @@ var
   var
     ref, tst: TSmallIntDynArray;
   begin
-    ref := Copy(srcData, AIndex * frameSampleCount, frameSampleCount);
-    SetLength(ref, frameSampleCount);
-    tst := Copy(dstData, AIndex * frameSampleCount, frameSampleCount);
-    results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, True, False, ref, tst);
+    //ref := Copy(srcData, AIndex * frameSampleCount, frameSampleCount);
+    //SetLength(ref, frameSampleCount);
+    //tst := Copy(dstData, AIndex * frameSampleCount, frameSampleCount);
+    //results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, True, False, ref, tst);
   end;
 
 var
   i, j, k: Integer;
-  best: Double;
 begin
   BWSearch := True;
   try
@@ -1391,8 +1418,9 @@ begin
       end;
 
       enc.SaveWAV;
-      for i := 0 to BandCount - 1 do
-        enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
+      if BandCount > 1 then
+        for i := 0 to BandCount - 1 do
+          enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
       if enc.Precision > 0 then
         enc.SaveRSC;
 
