@@ -109,7 +109,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -py -v -pr0"/>
+        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -v -br192 -obd12"/>
       </local>
     </RunParams>
     <Units Count="4">

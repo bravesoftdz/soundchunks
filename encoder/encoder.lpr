@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 2;
+  BandCount = 1;
   InputSNRDb = -90.3; // 16bit
 
 type
@@ -155,7 +155,7 @@ type
     BandDealiasSecondOrder: Boolean; // otherwise first order
     StoredBitDepth: Integer; // max 8Bits
     OutputBitDepth: Integer; // 8 to 16Bits
-    MinChunkSize: Integer;
+    ChunkSize: Integer;
     MaxFrameSize: Integer;
     MaxChunksPerBand: Integer;
     AlternateReduce: Boolean;
@@ -511,18 +511,6 @@ begin
 
   for i := 0 to chunks.Count - 1 do
   begin
-    //// add first and last sample to features to allow continuity between chunks
-    //XY[i, 0] := chunks[i].srcData[0];
-    //XY[i, 1] := chunks[i].srcData[globalData^.chunkSize - 1];
-    //
-    //// add approximate derivatives of first and last sample to features to allow continuity between chunks
-    //XY[i, 2] := -1.5 * chunks[i].srcData[0] +
-    //        2.0 * chunks[i].srcData[1] +
-    //        -0.5 * chunks[i].srcData[2];
-    //XY[i, 3] := 1.5 * chunks[i].srcData[globalData^.chunkSize - 1] +
-    //        -2.0 * chunks[i].srcData[globalData^.chunkSize - 2] +
-    //        0.5 * chunks[i].srcData[globalData^.chunkSize - 3];
-    //
     for j := 0 to globalData^.chunkSize - 1 do
       XY[i, j] := chunks[i].dct[j];
   end;
@@ -786,7 +774,7 @@ begin
 
         for k := 0 to cl.Count - 1 do
         begin
-          ms.WriteBuffer(cl[k].dstData[0], bandData[j].chunkSize);
+          ms.Write(cl[k].dstData[0], bandData[j].chunkSize);
         end;
       end;
 
@@ -806,9 +794,10 @@ begin
         end;
       end;
 
+      k := ms.Size;
       ms.Position := 0;
-      AStream.WriteWord(ms.Size);
-      AStream.CopyFrom(ms, ms.Size);
+      AStream.WriteWord(k);
+      AStream.CopyFrom(ms, k);
       ms.Clear;
     end;
   finally
@@ -857,11 +846,11 @@ begin
     else
       bnd.fch := power(2.0, (BandCount - 1 - i) * ratioP) * ratioL;
 
-    bnd.chunkSize := minChunkSize;
+    bnd.chunkSize := ChunkSize;
 
     // undersample if the band high freq is a lot lower than nyquist
 
-    bnd.underSample := Max(1, round(0.125 / bnd.fch));
+    bnd.underSample := Max(1, round(0.25 / bnd.fch));
 
     bandData[i] := bnd;
   end;
@@ -1043,9 +1032,9 @@ begin
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
   StoredBitDepth := 8;
-  OutputBitDepth := 13;
-  MinChunkSize := 8;
-  MaxFrameSize:= 16 * 1024;
+  OutputBitDepth := 16;
+  ChunkSize := 4;
+  MaxFrameSize:= 7 * 1024 div 2;
   AlternateReduce := False;
 
   BandBoundsOffset := 8;
@@ -1455,7 +1444,7 @@ begin
       WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
       WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
       WriteLn(#9'-obd'#9'output bit depth (1-8)');
-      WriteLn(#9'-mcs'#9'minimum chunk size');
+      WriteLn(#9'-cs'#9'chunk size');
       WriteLn(#9'-sbw'#9'per frame search for best band weighting');
       WriteLn(#9'-v'#9'verbose K-means');
       WriteLn(#9'-al'#9'use alternate clusering reduce method');
@@ -1474,7 +1463,7 @@ begin
       enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
       enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
-      enc.MinChunkSize :=  round(ParamValue('-mcs', enc.MinChunkSize));
+      enc.ChunkSize :=  round(ParamValue('-cs', enc.ChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
       enc.AlternateReduce := ParamStart('-ar') <> -1;
 
@@ -1485,7 +1474,7 @@ begin
       WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
       WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
-      WriteLn('MinChunkSize = ', enc.MinChunkSize);
+      WriteLn('ChunkSize = ', enc.ChunkSize);
       WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
       WriteLn;
 
