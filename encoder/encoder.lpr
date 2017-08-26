@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 1;
+  BandCount = 2;
   InputSNRDb = -90.3; // 16bit
 
 type
@@ -377,8 +377,8 @@ var
   chunk: TChunk;
 begin
   chunks.Clear;
-  chunks.Capacity := frame.ChunkCount;
-  for i := 0 to frame.chunkCount - 1 do
+  chunks.Capacity := (frame.chunkCount - 1) div globalData^.underSample + 1;
+  for i := 0 to chunks.Capacity - 1 do
   begin
     chunk := TChunk.Create(Self, i);
     chunk.ComputeBitRange;
@@ -417,7 +417,7 @@ var
   XY: TReal2DArray;
 begin
   prec := frame.encoder.Precision;
-  if (prec = 0) or (frame.ChunkCount <= frame.encoder.ChunksPerBand) then Exit;
+  if (prec = 0) or (chunks.Count <= frame.encoder.ChunksPerBand) then Exit;
 
   //WriteLn('KMeansReduce #', index, ' ', globalData^.desiredChunkCount);
 
@@ -863,7 +863,7 @@ begin
   frameCost := 0;
   for i := 0 to BandCount - 1 do
   begin
-    fixedCost += (SampleCount * round(log2(ChunksPerBand))) div (8 * ChunkSize) + SizeOf(Word);
+    fixedCost += (SampleCount * round(log2(ChunksPerBand))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Word);
     frameCost += ChunksPerBand * ChunkSize;
     frameCost += ChunksPerBand div 2;
   end;
@@ -880,10 +880,6 @@ begin
     writeln('ChunkSize = ', ChunkSize);
   end;
 
-  if not (BWSearch or CRSearch) then
-    for i := 0 to BandCount - 1 do
-       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].underSample);
-
   ProcThreadPool.DoParallelLocalProc(@DoBand, 0, BandCount - 1, nil);
 
   // pass 2
@@ -891,7 +887,7 @@ begin
   totalPower := 0.0;
   for j := 0 to BandCount - 1 do
     for i := 0 to SampleCount - 1 do
-      totalPower += sqr(bandData[j].filteredData[i]);
+      totalPower += 1;//sqr(bandData[j].filteredData[i]);
 
   perFramePower := sqrt(totalPower / frameCount);
   totalPower := sqrt(totalPower);
@@ -908,9 +904,9 @@ begin
   for i := 0 to SampleCount - 1 do
   begin
     for j := 0 to BandCount - 1 do
-      curPower += sqr(bandData[j].filteredData[i]);
+      curPower += 1;//sqr(bandData[j].filteredData[i]);
 
-    if (i mod ChunkSize = 0) and (sqrt(curPower) >= perFramePower) then
+    if (i mod blockSampleCount = 0) and (sqrt(curPower) >= perFramePower) then
     begin
       frm := TFrame.Create(Self, k, nextStart, i - 1);
       frames.Add(frm);
@@ -923,6 +919,10 @@ begin
 
   frm := TFrame.Create(Self, k, nextStart, SampleCount - 1);
   frames.Add(frm);
+
+  if not (BWSearch or CRSearch) then
+    for i := 0 to BandCount - 1 do
+       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].underSample);
 end;
 
 procedure TEncoder.MakeFrames;
@@ -987,7 +987,7 @@ begin
   StoredBitDepth := 8;
   OutputBitDepth := 16;
   ChunkSize := 4;
-  ChunksPerBand := 512;
+  ChunksPerBand := 256;
   AlternateReduce := False;
 
   BandBoundsOffset := 8;
