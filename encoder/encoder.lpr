@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 3;
+  BandCount = 2;
   InputSNRDb = -90.3; // 16bit
 
 type
@@ -289,7 +289,7 @@ end;
 
 procedure TFrame.FindBandDesiredChunkCount;
 var
-  i, allSz: Integer;
+  i, j, allSz, dbsOh: Integer;
   sz, dbh: Double;
   wgt, fsq: Double;
   full: Boolean;
@@ -320,12 +320,22 @@ begin
       bnd.weight *= max(1.0, (bnd.rmsPower - InputSNRDb)) / (dbh - InputSNRDb);
   end;
 
+  dbsOh := 0;
+  for i := 0 to BandCount - 1 do
+  begin
+    bnd := bands[i];
+
+    Inc(dbsOh);
+    for j := 1 to bnd.chunks.Count - 1 do
+      if bnd.chunks[j].dstBitShift <> bnd.chunks[j - 1].dstBitShift then
+        Inc(dbsOh);
+  end;
 
   allSz := 0;
   sz := 1;
   repeat
     full := True;
-    allSz := 0;
+    allSz := dbsOh * SizeOf(Byte) + SizeOf(Word);
     for i := 0 to BandCount - 1 do
     begin
       bnd := bands[i];
@@ -360,20 +370,18 @@ end;
 procedure TFrame.MakeBands;
 var
   i: Integer;
-  bnd: TBand;
 begin
+  for i := 0 to BandCount - 1 do
+    bands[i].MakeChunks;
+
   FindBandDesiredChunkCount;
 
   for i := 0 to BandCount - 1 do
   begin
-    bnd := bands[i];
-
-    bnd.MakeChunks;
-
     if not encoder.CRSearch then
-      bnd.KMeansReduce;
+      bands[i].KMeansReduce;
 
-    bnd.MakeDstData;
+    bands[i].MakeDstData;
   end;
 
   if not encoder.verbose or encoder.BWSearch then
@@ -760,13 +768,11 @@ procedure TEncoder.SaveStream(AStream: TStream);
 var
   i, j, k: Integer;
   ms: TMemoryStream;
-  ptr: PByte;
   b, pb : Integer;
   cl: TChunkList;
 begin
   AStream.WriteWord(bandData[0].chunkCount);
 
-  ptr := AllocMem(64 * 1024);
   ms := TMemoryStream.Create;
   try
     for i := 0 to frameCount - 1 do
@@ -807,9 +813,7 @@ begin
     end;
   finally
     ms.Free;
-    Freemem(ptr);
   end;
-
 end;
 
 procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
@@ -944,7 +948,7 @@ begin
 
   // pass 1
   projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
-  frameCount :=  (projectedByteSize - 1) div MaxFrameSize + 1;
+  frameCount :=  projectedByteSize div MaxFrameSize;
   frameSampleCount := (SampleCount - 1) div frameCount + 1;
   frameSampleCount := ((frameSampleCount - 1) div blockSampleCount + 1) * blockSampleCount;
 
@@ -1039,9 +1043,9 @@ begin
   HighCut := 18000.0;
   BandDealiasSecondOrder := True;
   StoredBitDepth := 8;
-  OutputBitDepth := 16;
+  OutputBitDepth := 13;
   MinChunkSize := 8;
-  MaxFrameSize:= 32 * 1024;
+  MaxFrameSize:= 16 * 1024;
   AlternateReduce := False;
 
   BandBoundsOffset := 8;
