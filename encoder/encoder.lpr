@@ -6,7 +6,6 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap,
 
 const
   BandCount = 2;
-  InputSNRDb = -90.3; // 16bit
 
 type
   TEncoder = class;
@@ -94,7 +93,6 @@ type
     frame: TFrame;
 
     index: Integer;
-    rmsPower: Double;
     weight: Double;
     AlternateReduceMethod: Boolean;
 
@@ -147,7 +145,6 @@ type
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
-    BandDealiasSecondOrder: Boolean; // otherwise first order
     StoredBitDepth: Integer; // max 8Bits
     OutputBitDepth: Integer; // 8 to 16Bits
     ChunkSize: Integer;
@@ -155,6 +152,8 @@ type
     AlternateReduce: Boolean;
     BandBoundsOffset: Integer;
     BandDenoiseStages: Integer;
+    VariableFrameSizeRatio: Double;
+    TrebleBoost: Boolean;
 
     SampleRate: Integer;
     SampleCount: Integer;
@@ -344,7 +343,6 @@ begin
 end;
 
 constructor TBand.Create(frm: TFrame; idx: Integer; startSample, endSample: Integer);
-var i: Integer;
 begin
   frame := frm;
   index := idx;
@@ -352,12 +350,6 @@ begin
   AlternateReduceMethod := frame.encoder.AlternateReduce;
 
   srcData := @globalData^.filteredData[startSample];
-
-  rmsPower := 0.0;
-  for i := startSample to endSample do
-    rmsPower += sqr(globalData^.filteredData[i]);
-  rmsPower := sqrt(rmsPower / (endSample - startSample + 1)) - 1.0 / Low(SmallInt);
-  rmsPower := 20.0 * log10(rmsPower);
 
   chunks := TChunkList.Create;
   reducedChunks := TChunkList.Create;
@@ -424,10 +416,8 @@ begin
   SetLength(XY, chunks.Count, frame.encoder.chunkSize);
 
   for i := 0 to chunks.Count - 1 do
-  begin
     for j := 0 to frame.encoder.chunkSize - 1 do
       XY[i, j] := chunks[i].dct[j];
-  end;
 
   DoExternalKMeans(XY, frame.encoder.ChunksPerBand, 1, prec, AlternateReduceMethod, False, XYC);
 
@@ -669,7 +659,7 @@ procedure TEncoder.SaveStream(AStream: TStream);
 var
   i, j, k, l: Integer;
   ms: TMemoryStream;
-  a, b : Integer;
+  a, b, c, d : Integer;
   cl: TChunkList;
 begin
   ms := TMemoryStream.Create;
@@ -682,14 +672,22 @@ begin
         if cl.Count = 0 then
           cl := frames[i].bands[j].chunks;
 
-        for k := 0 to (cl.Count - 1) div 2 do
-        begin
-          a := cl[k * 2].dstBitShift;
-          b := 0;
-          if k * 2 + 1 < cl.Count then
-            b := cl[k * 2 + 1].dstBitShift;
-          ms.WriteByte(a or (b shl 4));
-        end;
+        if OutputBitDepth >= 12 then
+          for k := 0 to (cl.Count - 1) div 2 do
+          begin
+            a := cl[k * 2].dstBitShift;
+            if k * 2 + 1 < cl.Count then b := cl[k * 2 + 1].dstBitShift else b := 0;
+            ms.WriteByte(a or (b shl 4));
+          end
+        else
+          for k := 0 to (cl.Count - 1) div 4 do
+          begin
+            a := cl[k * 4].dstBitShift - 4;
+            if k * 4 + 1 < cl.Count then b := cl[k * 4 + 1].dstBitShift - 4 else b := 0;
+            if k * 4 + 2 < cl.Count then c := cl[k * 4 + 2].dstBitShift - 4 else c := 0;
+            if k * 4 + 3 < cl.Count then d := cl[k * 4 + 3].dstBitShift - 4 else d := 0;
+            ms.WriteByte(a or (b shl 2) or (c shl 4) or (d shl 6));
+          end;
 
 
         for k := 0 to cl.Count - 1 do
@@ -801,32 +799,16 @@ begin
   bnd.filteredData := DoBPFilter(bnd.fcl, bnd.fch, BandTransFactor, bnd.filteredData);
   SetLength(bnd.filteredData, SampleCount);
 
-  if AIndex < BandCount - 1 then
+  if (AIndex < BandCount - 1) or TrebleBoost then
   begin
     // compensate for decoder altering the pass band (low pass)
-    cic := TCICFilter.Create(bnd.fch, BandDenoiseStages, False);
+    cic := TCICFilter.Create(bnd.fch, BandDenoiseStages, True);
     try
       for j := -cic.Ratio + 1 to High(bnd.filteredData) do
       begin
         cicSmp := cic.ProcessSample(bnd.filteredData[Min(High(bnd.filteredData), j + cic.Ratio - 1)]);
         if j >= 0 then
-          bnd.filteredData[j] += cic.Stages * (bnd.filteredData[j]- cicSmp);
-      end;
-    finally
-      cic.Free;
-    end;
-  end;
-
-  if AIndex > 0 then
-  begin
-    // compensate for decoder altering the pass band (high pass)
-    cic := TCICFilter.Create(bnd.fcl, BandDenoiseStages, False);
-    try
-      for j := -cic.Ratio + 1 to High(bnd.filteredData) do
-      begin
-        cicSmp := cic.ProcessSample(bnd.filteredData[Min(High(bnd.filteredData), j + cic.Ratio - 1)]);
-        if j >= 0 then
-          bnd.filteredData[j] += cicSmp;
+          bnd.filteredData[j] += 2.4 * cicSmp;
       end;
     finally
       cic.Free;
@@ -844,9 +826,9 @@ procedure TEncoder.PrepareFrames;
   end;
 
 var
-  i, j, k, blockSampleCount, fixedCost, frameCost, nextStart: Integer;
+  i, k, blockSampleCount, fixedCost, frameCost, nextStart: Integer;
   frm: TFrame;
-  totalPower, perFramePower, curPower: Double;
+  avgPower, totalPower, perFramePower, curPower: Double;
 begin
   MakeBandGlobalData;
 
@@ -865,7 +847,7 @@ begin
   begin
     fixedCost += (SampleCount * round(log2(ChunksPerBand))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Word);
     frameCost += ChunksPerBand * ChunkSize;
-    frameCost += ChunksPerBand div 2;
+    frameCost += (ChunksPerBand - 1) div ifthen(OutputBitDepth >= 12, 2, 4) + 1;
   end;
 
   frameCount := (projectedByteSize - fixedCost - 1) div frameCost + 1;
@@ -884,18 +866,21 @@ begin
 
   // pass 2
 
-  totalPower := 0.0;
-  for j := 0 to BandCount - 1 do
-    for i := 0 to SampleCount - 1 do
-      totalPower += 1;//sqr(bandData[j].filteredData[i]);
+  avgPower := 0.0;
+  for i := 0 to SampleCount - 1 do
+    avgPower += sqr(makeFloatSample(srcData[i]));
+  avgPower /= BandCount * SampleCount;
 
-  perFramePower := sqrt(totalPower / frameCount);
-  totalPower := sqrt(totalPower);
+  totalPower := 0.0;
+  for i := 0 to SampleCount - 1 do
+    totalPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
+
+  perFramePower := totalPower / frameCount;
 
   if verbose and not (BWSearch or CRSearch) then
   begin
-    writeln('TotalPower = ', FloatToStr(totalPower));
-    writeln('PerFramePower = ', FloatToStr(perFramePower));
+    writeln('TotalPower = ', FormatFloat('0.00', totalPower));
+    writeln('PerFramePower = ', FormatFloat('0.00', perFramePower));
   end;
 
   k := 0;
@@ -903,10 +888,9 @@ begin
   curPower := 0.0;
   for i := 0 to SampleCount - 1 do
   begin
-    for j := 0 to BandCount - 1 do
-      curPower += 1;//sqr(bandData[j].filteredData[i]);
+    curPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
 
-    if (i mod blockSampleCount = 0) and (sqrt(curPower) >= perFramePower) then
+    if (i mod blockSampleCount = 0) and (curPower >= perFramePower) then
     begin
       frm := TFrame.Create(Self, k, nextStart, i - 1);
       frames.Add(frm);
@@ -980,18 +964,19 @@ begin
 
   BitRate := 128;
   Precision := 7;
-  BandTransFactor := 0.1;
   LowCut := 32.0;
   HighCut := 18000.0;
-  BandDealiasSecondOrder := True;
-  StoredBitDepth := 8;
-  OutputBitDepth := 16;
+  OutputBitDepth := 11;
   ChunkSize := 4;
-  ChunksPerBand := 256;
   AlternateReduce := False;
+  TrebleBoost := False;
+  VariableFrameSizeRatio := 0.5;
 
+  StoredBitDepth := 8;
+  ChunksPerBand := 256;
   BandBoundsOffset := 8;
   BandDenoiseStages := 2;
+  BandTransFactor := 0.1;
 
   frames := TFrameList.Create;
 end;
@@ -1009,7 +994,7 @@ var
   smp: Double;
   offset: array[0 .. BandCount - 1] of Integer;
   bnd: TBandGlobalData;
-  lp, hp: array[0 .. BandCount - 1] of TCICFilter;
+  lp: array[0 .. BandCount - 1] of TCICFilter;
 begin
   if not (BWSearch or CRSearch) then
     WriteLn('MakeDstData');
@@ -1026,18 +1011,11 @@ begin
 
     offset[i] := 0;
     lp[i] := Nil;
-    hp[i] := Nil;
 
     if i < BandCount - 1 then
     begin
       lp[i] := TCICFilter.Create(bnd.fch, BandDenoiseStages, False);
       offset[i] += -lp[i].Ratio + 1;
-    end;
-
-    if i > 0 then
-    begin
-      hp[i] := TCICFilter.Create(bnd.fcl, BandDenoiseStages, True);
-      offset[i] += -hp[i].Ratio + 1;
     end;
 
     bandData[i] := bnd;
@@ -1055,9 +1033,6 @@ begin
           if Assigned(lp[j]) then
             smp := lp[j].ProcessSample(smp);
 
-          if Assigned(hp[j]) then
-            smp := hp[j].ProcessSample(smp);
-
           poso := pos + offset[j];
           if InRange(poso, 0, High(dstData)) then
           begin
@@ -1070,10 +1045,7 @@ begin
       end;
   finally
     for i := 0 to BandCount - 1 do
-    begin
       lp[i].Free;
-      hp[i].Free;
-    end;
   end;
 end;
 
@@ -1367,13 +1339,13 @@ begin
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
-      WriteLn(#9'-btf'#9'band transition factor (0.0001-1)');
-      WriteLn(#9'-bd1'#9'use first order dealias filter (otherwise second order)');
-      WriteLn(#9'-obd'#9'output bit depth (1-8)');
+      WriteLn(#9'-tb'#9'apply treble boost');
+      WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0)');
+      WriteLn(#9'-obd'#9'output bit depth (8-16)');
       WriteLn(#9'-cs'#9'chunk size');
       WriteLn(#9'-sbw'#9'per frame search for best band weighting');
       WriteLn(#9'-v'#9'verbose K-means');
-      WriteLn(#9'-al'#9'use alternate clusering reduce method');
+      WriteLn(#9'-ar'#9'use alternate clustering reduce method');
       WriteLn;
       Writeln('(source file must be 16bit mono WAV)');
       WriteLn;
@@ -1386,8 +1358,8 @@ begin
       enc.Precision := round(ParamValue('-pr', enc.Precision));
       enc.LowCut :=  ParamValue('-lc', enc.LowCut);
       enc.HighCut :=  ParamValue('-hc', enc.HighCut);
-      enc.BandTransFactor :=  ParamValue('-btf', enc.BandTransFactor);
-      enc.BandDealiasSecondOrder :=  ParamStart('-bd1') = -1;
+      enc.TrebleBoost := ParamStart('-tb') <> -1;
+      enc.VariableFrameSizeRatio :=  ParamValue('-vfr', enc.VariableFrameSizeRatio);
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.ChunkSize :=  round(ParamValue('-cs', enc.ChunkSize));
       enc.verbose := ParamStart('-v') <> -1;
@@ -1397,8 +1369,8 @@ begin
       WriteLn('Precision = ', enc.Precision);
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
-      WriteLn('BandTransFactor = ', FloatToStr(enc.BandTransFactor));
-      WriteLn('BandDealiasSecondOrder = ', BoolToStr(enc.BandDealiasSecondOrder, True));
+      WriteLn('TrebleBoost = ', BoolToStr(enc.TrebleBoost, True));
+      WriteLn('VariableFrameSizeRatio = ', FloatToStr(enc.VariableFrameSizeRatio));
       WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
       WriteLn('ChunkSize = ', enc.ChunkSize);
       WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
