@@ -118,16 +118,17 @@
         <IsPartOfProject Value="True"/>
       </Unit0>
       <Unit1>
-        <Filename Value="yakmo.pas"/>
+        <Filename Value="anysort.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit1>
       <Unit2>
-        <Filename Value="anysort.pas"/>
+        <Filename Value="alglib\conv.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit2>
       <Unit3>
-        <Filename Value="alglib\conv.pas"/>
+        <Filename Value="extern.pas"/>
         <IsPartOfProject Value="True"/>
+        <UnitName Value="yakmo"/>
       </Unit3>
     </Units>
   </ProjectOptions>

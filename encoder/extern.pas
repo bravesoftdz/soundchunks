@@ -1,4 +1,4 @@
-unit yakmo;
+unit extern;
 
 {$mode objfpc}{$H+}
 

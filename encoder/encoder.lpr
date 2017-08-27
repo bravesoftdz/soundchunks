@@ -2,7 +2,7 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, yakmo, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
   BandCount = 2;
@@ -31,21 +31,6 @@ type
     comb: TDoubleDynArray2;
   public
     Ratio: Integer;
-    Stages: Integer;
-    HighPass: Boolean;
-
-    constructor Create(AFc: Double; AStages: Integer; AHighPass: Boolean);
-
-    function ProcessSample(Smp: Double): Double;
-  end;
-
-  { TSimpleFilter }
-
-  TSimpleFilter = class
-  private
-    prevSmp: TDoubleDynArray;
-  public
-    Count: Integer;
     Stages: Integer;
     HighPass: Boolean;
 
@@ -196,8 +181,6 @@ type
     procedure MakeFrames;
     procedure MakeDstData;
 
-    procedure SearchBestBandWeighting;
-
     function DoFilterCoeffs(fc, transFactor: Double; HighPass, Windowed: Boolean): TDoubleDynArray;
     function DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
     function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
@@ -225,31 +208,6 @@ begin
   if idx < 0 then
     Exit(def);
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
-end;
-
-constructor TSimpleFilter.Create(AFc: Double; AStages: Integer; AHighPass: Boolean);
-begin
-  Stages := AStages;
-  HighPass := AHighPass;
-  Count := trunc(sqrt(0.196202 + sqr(AFc)) / AFc);
-  SetLength(prevSmp, Stages);
-end;
-
-function TSimpleFilter.ProcessSample(Smp: Double): Double;
-var
-  i: Integer;
-  v: Double;
-begin
-  Result := Smp;
-  for i := 0 to Stages - 1 do
-  begin
-    v := prevSmp[i];
-    prevSmp[i] := Result;
-    Result := (Count * v + Result) / (Count + 1);
-  end;
-
-  if HighPass then
-    Result := Smp - Result;
 end;
 
 constructor TFrame.Create(enc: TEncoder; idx, startSample, endSample: Integer);
@@ -1049,80 +1007,6 @@ begin
   end;
 end;
 
-procedure TEncoder.SearchBestBandWeighting;
-type
-  TSBW = record
-    RMSWeighting: Boolean;
-    BWeighting: Boolean;
-    ApplyPower: Integer;
-    AltMethod: Integer;
-  end;
-
-const
-  sbw: array[0..3] of TSBW =
-  (
-    // per band
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 0),
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 1),
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: 2),
-    // reference
-    (RMSWeighting: True;  BWeighting: True;  ApplyPower: 0;  AltMethod: -1)
-  );
-
-var
-  results: array[0..High(sbw)] of TDoubleDynArray;
-
-  procedure DoEAQ(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
-  var
-    ref, tst: TSmallIntDynArray;
-  begin
-    //ref := Copy(srcData, AIndex * frameSampleCount, frameSampleCount);
-    //SetLength(ref, frameSampleCount);
-    //tst := Copy(dstData, AIndex * frameSampleCount, frameSampleCount);
-    //results[PtrInt(AData), AIndex] := ComputeEAQUAL(frameSampleCount, True, False, ref, tst);
-  end;
-
-var
-  i, j, k: Integer;
-begin
-  BWSearch := True;
-  try
-    for i := 0 to High(sbw) do
-    begin
-      PrepareFrames;
-
-      for j := 0 to frameCount - 1 do
-        for k := 0 to BandCount - 1 do
-          frames[j].bands[k].AlternateReduceMethod := sbw[i].AltMethod = k;
-
-      MakeFrames;
-      MakeDstData;
-
-      SetLength(results[i], frameCount);
-
-      ProcThreadPool.DoParallelLocalProc(@DoEAQ, 0, frameCount - 1, Pointer(i));
-    end;
-  finally
-    BWSearch := False;
-  end;
-
-  PrepareFrames;
-
-  for j := 0 to frameCount - 1 do
-  begin
-    for i := 0 to BandCount - 1 do
-      frames[j].bands[i].AlternateReduceMethod := results[i, j] > results[BandCount, j];
-
-    Write('#', j);
-    for i := 0 to BandCount - 1 do
-      Write(#9, frames[j].bands[i].AlternateReduceMethod);
-    WriteLn;
-  end;
-
-  MakeFrames;
-  MakeDstData;
-end;
-
 function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass, Windowed: Boolean): TDoubleDynArray;
 var
   sinc, win, sum: Double;
@@ -1343,7 +1227,6 @@ begin
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0)');
       WriteLn(#9'-obd'#9'output bit depth (8-16)');
       WriteLn(#9'-cs'#9'chunk size');
-      WriteLn(#9'-sbw'#9'per frame search for best band weighting');
       WriteLn(#9'-v'#9'verbose K-means');
       WriteLn(#9'-ar'#9'use alternate clustering reduce method');
       WriteLn;
@@ -1378,16 +1261,9 @@ begin
 
       enc.Load;
 
-      if ParamStart('-sbw') <> -1 then
-      begin
-        enc.SearchBestBandWeighting;
-      end
-      else
-      begin
-        enc.PrepareFrames;
-        enc.MakeFrames;
-        enc.MakeDstData;
-      end;
+      enc.PrepareFrames;
+      enc.MakeFrames;
+      enc.MakeDstData;
 
       enc.SaveWAV;
       if BandCount > 1 then
