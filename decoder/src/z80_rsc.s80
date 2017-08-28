@@ -1,59 +1,144 @@
 ; Z80 driver for replaying RSE SoundChunks PCM streams
 ; By GliGli
 
-; ###########################      define      ##############################
+; ###########################	   define      ##############################
 
-            INCLUDE "z80_def.i80"   ; basic definitions
+	INCLUDE "z80_def.i80"	; basic definitions
 
-; ###########################       var        ##############################
+; ###########################	    var	       ##############################
 
-RSCFLAGS    EQU     PARAMS+$00
-RSCBANK     EQU     PARAMS+$01
+RSCFLAGS	EQU	PARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
+RSCBANK		EQU	PARAMS+0x01
+RSCIDXCNT	EQU	PARAMS+0x02
 
-WAVBUFFER0  EQU     $1E00           ; WAV buffer 0
-WAVBUFFER1  EQU     $1F00           ; WAV buffer 1
+WAVBUFFER0  EQU	    0x1E00	    ; WAV buffer 0
+WAVBUFFER1  EQU	    0x1F00	    ; WAV buffer 1
 
+; ###########################	   macro       ##############################
 
-; ###########################      macro       ##############################
+	INCLUDE "z80_mac.i80"  ; basic macros
 
-            INCLUDE "z80_mac.i80"  ; basic macros
+	; data -> YM2612 low reg address
+	macro	ymW0 addr, data
+	
+	LD	HL, YMPORT0
 
-; ###########################       init       ##############################
+	LD	(HL), addr
+	INC	L
+	LD	(HL), data
 
-            ORG     $0000
+	endm
+	
+	; data -> YM2612 high reg address
+	macro	ymW1 addr, data
+	
+	LD	HL, YMPORT2
+
+	LD	(HL), addr
+	INC	L
+	LD	(HL), data
+
+	endm
+	
+	; 8bit sample in C
+	macro	ymWSH
+	
+	LD	HL, YMPORT0
+
+	LD	(HL), 0x2a
+	INC	L
+	LD	(YMPORT1), A
+
+	endm
+
+	; 9th sample bit in Carry
+	macro	ymWSL
+	
+	LD	HL, YMPORT0
+
+	LD	(HL), 0x2a
+	RLA
+	RLA
+	RLA
+	RLA
+	AND	0x08
+	INC	L
+	LD	(HL), A
+
+	endm
+
+	; wait YM2612 timer A and reset it
+	macro	ymWT
+	
+	LD	HL, YMPORT0
+	
+wait:	BIT	0, (HL)
+	JP	NZ, wait
+	
+	LD	(HL), 0x27
+	INC	L
+	LD	(HL), 0x15
+	
+	endm
+	
+
+; ###########################	    init       ##############################
+
+	ORG	0x0000
 
 init:
-            DI                      ; disable ints
-            LD      SP, $2000       ; setup stack
-            IM      $01             ; set int mode 1
-            XOR     A
-            LD      (STATUS), A     ; driver not ready
-            LD      (COMMAND), A    ; command cleared
-            JP      start           ; jump to start
+	DI			; disable ints
+	LD	SP, 0x2000	; setup stack
+	IM	0x01		; set int mode 1
+	XOR	A
+	LD	(STATUS), A	; driver not ready
+	LD	(COMMAND), A	; command cleared
+	JP	start		; jump to start
 
 
-; ###########################     interrupt    ##############################
+; ###########################	  interrupt    ##############################
 
-            BLOCK   $0038-$
+	BLOCK	0x0038-$
 
-interrupt:                           ; do nothing in this program
-            RETI
+interrupt:			     ; do nothing in this program
+	RETI
 
 
-; ###########################       main       ##############################
+; ###########################	    main       ##############################
 
-            BLOCK   $0200-$
+	BLOCK	0x0200-$
 
 start:
-			
+	; wait for 68k side init
+	LD	A, (RSCFLAGS)
+	RRCA
+	JP	NC, start
 
-			LD		A, (RSCBANK)
-			setBankFast
+	; set config
+	LD	A, (RSCBANK)
+	setBankFast
 
+	; Enable DAC
+	ymW0 0x2b, 0x80
+	
+	; DAC Pan = LR
+	ymW1 0xb6, 0xc0
 
-            LD      HL, PARAMS
+	; Timer A enabled @ 26390Hz
+	ymW0 0x24, 0xff
+	ymW0 0x25, 0x02
+	ymW0 0x27, 0x15
+
+	; DAC init sample
+	ymW0 0x2c, 0x08
+	ymW0 0x2a, 0x80
+
+	; Z80 side init done
+	LD	A, (RSCFLAGS)
+	OR	2
+	LD	(RSCFLAGS), A
 
 main_loop:
-            JP      main_loop
+	JP	main_loop
 
-            END
+	END

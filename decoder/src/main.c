@@ -2,16 +2,16 @@
 #include <kdebug.h>
 
 #include "../res/rsc.h"
+#include "rsc.h"
 
 #define RSC_SAMPLES_PER_CHUNK_SHIFT 2
 #define RSC_SAMPLES_PER_CHUNK (1 << RSC_SAMPLES_PER_CHUNK_SHIFT)
 #define RSC_CHUNKS_PER_FRAME 256
 
+#define USE_RSC_REF_DECODER
+
 int main()
 {
-	SYS_disableInts();
-	Z80_requestBus(TRUE);
-	
 	vu8 *ymA0 = (vu8 *) 0xa04000;
 	vu8 *ymD0 = (vu8 *) 0xa04001;
 	vu8 *ymA1 = (vu8 *) 0xa04002;
@@ -56,6 +56,42 @@ int main()
 		while(*ymA0 & 0x80);
 	}
 	
+	u8 track = 0;
+	
+start:	
+	VDP_clearPlan(PLAN_A, TRUE);
+	VDP_drawText("RSE SoundChunks decoder", 8, 4);
+#ifdef USE_RSC_REF_DECODER
+	VDP_drawText("(68k ref mode)", 12, 5);
+#else
+	VDP_drawText("(Z80 mode)", 14, 5);
+#endif	
+	VDP_drawText("(Press A for next track)", 2, 12);
+	
+	u8 * rsc = NULL;
+
+	track = track % 3;
+	
+	switch(track)
+	{
+	case 0:
+		VDP_drawText("Kavinsky - Outrun Prelude", 2, 10);
+		rsc = (u8 *) rsc_kav;	
+		break;
+	case 1:
+		VDP_drawText("David Whittaker - Shadow of the Beast", 2, 10);
+		rsc = (u8 *) rsc_sob;
+		break;
+	case 2:
+		VDP_drawText("Wintergatan - Live Intro", 2, 10);
+		rsc = (u8 *) rsc_win;
+		break;
+	}
+	
+#ifdef USE_RSC_REF_DECODER
+	SYS_disableInts();
+	Z80_requestBus(TRUE);
+
 	// Enable DAC
 	ymW0(0x2b, 0x80);
 	
@@ -70,33 +106,6 @@ int main()
 	// DAC init sample
 	ymW0(0x2c, 0x08);
 	ymW0(0x2a, 0x80);
-	
-	u8 track = 0;
-	
-start:	
-	VDP_clearPlan(PLAN_A, TRUE);
-	VDP_drawText("RSE SoundChunks decoder", 8, 4);
-	VDP_drawText("(Press A for next track)", 2, 12);
-	
-	u8 * rsc = NULL;
-
-	track = track % 3;
-	
-	switch(track)
-	{
-	case 0:
-		VDP_drawText("Kavinsky - Outrun Prelude", 2, 8);
-		rsc = (u8 *) rsc_kav;	
-		break;
-	case 1:
-		VDP_drawText("David Whittaker - Shadow of the Beast", 2, 8);
-		rsc = (u8 *) rsc_sob;
-		break;
-	case 2:
-		VDP_drawText("Wintergatan - Live Intro", 2, 8);
-		rsc = (u8 *) rsc_win;
-		break;
-	}
 	
 	do
 	{
@@ -157,11 +166,26 @@ start:
 		}
 
 		ymWT();
-
-#if 0
-		KLog_U4("bsCtr ", bsCtr, " phase ", phase, " idxCnt ", idxCnt, " bitShift ", bitShift);
-		VDP_waitVSync();
-#endif		
 	}
+#else
+	RSC_Init(rsc);
+	
+	for(;;)
+	{
+		if (JOY_readJoypad(0) & BUTTON_A)
+		{
+			RSC_StopTrack(FALSE);
+		}
+		
+		if (RSC_IsTrackFinished())
+		{
+			track++;
+			goto start;
+		}
+		
+		VDP_waitVSync();
+	}
+#endif
+
 	return 0;
 }
