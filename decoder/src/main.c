@@ -1,6 +1,12 @@
 #include <genesis.h>
 #include <kdebug.h>
 
+#include "../res/rsc.h"
+
+#define RSC_SAMPLES_PER_CHUNK_SHIFT 2
+#define RSC_SAMPLES_PER_CHUNK (1 << RSC_SAMPLES_PER_CHUNK_SHIFT)
+#define RSC_CHUNKS_PER_FRAME 256
+
 int main()
 {
 	//Z80_startReset();
@@ -21,10 +27,16 @@ int main()
 		while(*ymA0 & 0x80);
 	}
 	
-	inline auto void ymWS(u8 s)
+	inline auto void ymWSH(u8 s)
 	{
 		*ymA0 = 0x2a;
 		*ymD0 = s;
+	}
+
+	inline auto void ymWSL(u8 s)
+	{
+		*ymA0 = 0x2c;
+		*ymD0 = s << 3;
 	}
 
 	inline auto void ymWT(void)
@@ -55,30 +67,69 @@ int main()
 	ymW0(0x25, 0x02);
 	ymW0(0x27, 0x15);
 
-	// 9th DAC bit = 1
+	// DAC init sample
 	ymW0(0x2c, 0x08);
-
-	// DAC middle sample
 	ymW0(0x2a, 0x80);
 	
-	u16 sine[256];
-	for(s16 i = 0; i < 256 ; ++i)
-	{
-		fix32 f =min((sinFix32(i << 2) >> 3) + 128, 255);
-		
-//		if (f >= 128) f = max(128, f - 3);
-		sine[i] = f;
-	}
+	VDP_drawText("RSE SoundChunks decoder", 4, 4);
 	
-	VDP_drawText("init", 0, 0);
-	
+start:	
 	SYS_disableInts();
-	
-	u8 ph = 0;
+
+	u8 * rsc = (u8 *) rsc_data;	
+	u8 *chunks = &rsc[2];
+	u16 idxCnt = 0, bsCtr = 0, phase = 0, curChunkOff = 0;
+	u8 bitShift, sample;
 	for(;;)
 	{
-		ymWS(sine[ph++]);
+		if(!phase)
+		{
+			if (!idxCnt)
+			{
+				idxCnt = *rsc++;
+				idxCnt |= (*rsc++) << 8;
+				if (!idxCnt) goto start;
+
+				chunks = rsc;
+				rsc += RSC_SAMPLES_PER_CHUNK * RSC_CHUNKS_PER_FRAME;
+				bsCtr = 0;
+				phase = 0;
+			}
+			
+			bitShift <<= 1;
+
+			if (!bsCtr)
+			{
+				bitShift = *rsc++;
+				bsCtr = 8;
+			}
+
+			curChunkOff = (*rsc++) << RSC_SAMPLES_PER_CHUNK_SHIFT;
+			phase = RSC_SAMPLES_PER_CHUNK;
+			bsCtr--;
+			idxCnt--;
+		}
+		
+		phase--;
+		
+		sample = chunks[curChunkOff + phase];
+		if (bitShift & 0x80)
+		{
+			ymWSH(sample);
+			ymWSL(1);
+		}
+		else
+		{
+			ymWSH((sample >> 1) + 64);
+			ymWSL(sample & 1);
+		}
+
 		ymWT();
+
+#if 0
+		KLog_U4("bsCtr ", bsCtr, " phase ", phase, " idxCnt ", idxCnt, " bitShift ", bitShift);
+		VDP_waitVSync();
+#endif		
 	}
 	return 0;
 }
