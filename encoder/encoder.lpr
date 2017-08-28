@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
 
 const
-  BandCount = 2;
+  BandCount = 1;
 
 type
   TEncoder = class;
@@ -637,7 +637,7 @@ begin
             if k * 2 + 1 < cl.Count then b := cl[k * 2 + 1].dstBitShift else b := 0;
             ms.WriteByte(a or (b shl 4));
           end
-        else
+        else if OutputBitDepth > 8 then
           for k := 0 to (cl.Count - 1) div 4 do
           begin
             a := cl[k * 4].dstBitShift - 4;
@@ -805,7 +805,8 @@ begin
   begin
     fixedCost += (SampleCount * round(log2(ChunksPerBand))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Word);
     frameCost += ChunksPerBand * ChunkSize;
-    frameCost += (ChunksPerBand - 1) div ifthen(OutputBitDepth >= 12, 2, 4) + 1;
+    if OutputBitDepth > 8 then
+      frameCost += (ChunksPerBand - 1) div ifthen(OutputBitDepth >= 12, 2, 4) + 1;
   end;
 
   frameCount := (projectedByteSize - fixedCost - 1) div frameCost + 1;
@@ -924,7 +925,7 @@ begin
   Precision := 7;
   LowCut := 32.0;
   HighCut := 18000.0;
-  OutputBitDepth := 11;
+  OutputBitDepth := 8;
   ChunkSize := 4;
   AlternateReduce := False;
   TrebleBoost := False;

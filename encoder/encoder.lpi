@@ -128,7 +128,6 @@
       <Unit3>
         <Filename Value="extern.pas"/>
         <IsPartOfProject Value="True"/>
-        <UnitName Value="yakmo"/>
       </Unit3>
     </Units>
   </ProjectOptions>
