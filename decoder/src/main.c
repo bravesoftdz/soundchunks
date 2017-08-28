@@ -9,7 +9,7 @@
 
 int main()
 {
-	//Z80_startReset();
+	SYS_disableInts();
 	Z80_requestBus(TRUE);
 	
 	vu8 *ymA0 = (vu8 *) 0xa04000;
@@ -71,12 +71,38 @@ int main()
 	ymW0(0x2c, 0x08);
 	ymW0(0x2a, 0x80);
 	
-	VDP_drawText("RSE SoundChunks decoder", 4, 4);
+	u8 track = 0;
 	
 start:	
-	SYS_disableInts();
+	VDP_clearPlan(PLAN_A, TRUE);
+	VDP_drawText("RSE SoundChunks decoder", 8, 4);
+	VDP_drawText("(Press A for next track)", 2, 12);
+	
+	u8 * rsc = NULL;
 
-	u8 * rsc = (u8 *) rsc_data;	
+	track = track % 3;
+	
+	switch(track)
+	{
+	case 0:
+		VDP_drawText("Kavinsky - Outrun Prelude", 2, 8);
+		rsc = (u8 *) rsc_kav;	
+		break;
+	case 1:
+		VDP_drawText("David Whittaker - Shadow of the Beast", 2, 8);
+		rsc = (u8 *) rsc_sob;
+		break;
+	case 2:
+		VDP_drawText("Wintergatan - Live Intro", 2, 8);
+		rsc = (u8 *) rsc_win;
+		break;
+	}
+	
+	do
+	{
+		JOY_update();
+	} while(JOY_readJoypad(0) & BUTTON_A);	
+
 	u8 *chunks = &rsc[2];
 	u16 idxCnt = 0, bsCtr = 0, phase = 0, curChunkOff = 0;
 	u8 bitShift, sample;
@@ -88,7 +114,13 @@ start:
 			{
 				idxCnt = *rsc++;
 				idxCnt |= (*rsc++) << 8;
-				if (!idxCnt) goto start;
+				
+				JOY_update();
+				if (!idxCnt || (JOY_readJoypad(0) & BUTTON_A))
+				{
+					track++;
+					goto start;
+				}
 
 				chunks = rsc;
 				rsc += RSC_SAMPLES_PER_CHUNK * RSC_CHUNKS_PER_FRAME;
