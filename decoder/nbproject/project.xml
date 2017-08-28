@@ -14,7 +14,11 @@
             </sourceRootList>
             <confList>
                 <confElem>
-                    <name>Release</name>
+                    <name>Release_Emu</name>
+                    <type>0</type>
+                </confElem>
+                <confElem>
+                    <name>Release_MD</name>
                     <type>0</type>
                 </confElem>
                 <confElem>
