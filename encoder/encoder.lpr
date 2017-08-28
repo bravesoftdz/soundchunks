@@ -228,6 +228,8 @@ begin
   ChunkCount := (endSample - startSample + 1 - 1) div encoder.ChunkSize + 1;
   SampleCount := endSample - startSample + 1;
 
+  Assert(ChunkCount < 65536, 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
+
   if encoder.verbose and not (encoder.BWSearch or encoder.CRSearch) then
   begin
     WriteLn('Frame #', index, #9, ChunkCount);
@@ -801,10 +803,14 @@ begin
 
   projectedByteSize := fixedCost + frameCount * frameCost;
 
+  if not (BWSearch or CRSearch) then
+    writeln('FrameCount = ', frameCount);
+
+  Assert(frameCount > 0, 'Negative FrameCount! (BitRate too low)');
+
   if verbose and not (BWSearch or CRSearch) then
   begin
     writeln('FrameSize = ', projectedByteSize div frameCount);
-    writeln('FrameCount = ', frameCount);
     writeln('ProjectedByteSize = ', projectedByteSize);
     writeln('ChunkSize = ', ChunkSize);
   end;
@@ -1208,18 +1214,21 @@ begin
     if ParamCount < 2 then
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
+      Writeln('Main options:');
       WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-q128"');
-      WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-tb'#9'apply treble boost');
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0)');
-      WriteLn(#9'-obd'#9'output bit depth (8-16)');
+      WriteLn(#9'-v'#9'verbose mode');
+      Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
-      WriteLn(#9'-v'#9'verbose K-means');
       WriteLn(#9'-ar'#9'use alternate clustering reduce method');
+      WriteLn(#9'-obd'#9'output bit depth (8-16)');
+      WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
+
       WriteLn;
-      Writeln('(source file must be 16bit mono WAV)');
+      Writeln('(source file must be 16bit mono WAV, preferably 26390Hz for MegaDrive playback)');
       WriteLn;
       Exit;
     end;
@@ -1238,14 +1247,17 @@ begin
       enc.AlternateReduce := HasParam('-ar');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
-      WriteLn('Precision = ', enc.Precision);
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
       WriteLn('TrebleBoost = ', BoolToStr(enc.TrebleBoost, True));
       WriteLn('VariableFrameSizeRatio = ', FloatToStr(enc.VariableFrameSizeRatio));
-      WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
-      WriteLn('ChunkSize = ', enc.ChunkSize);
-      WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
+      if enc.verbose then
+      begin
+        WriteLn('ChunkSize = ', enc.ChunkSize);
+        WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
+        WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
+        WriteLn('Precision = ', enc.Precision);
+      end;
       WriteLn;
 
       enc.Load;
