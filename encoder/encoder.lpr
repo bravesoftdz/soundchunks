@@ -1215,7 +1215,7 @@ begin
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       Writeln('Main options:');
-      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-q128"');
+      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-br128"');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-tb'#9'apply treble boost');
