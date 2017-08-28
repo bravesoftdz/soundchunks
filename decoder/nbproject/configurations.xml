@@ -3,6 +3,7 @@
   <logicalFolder name="root" displayName="root" projectFiles="true" kind="ROOT">
     <df root="src" name="0">
       <in>main.c</in>
+      <in>z80_rsc.s80</in>
     </df>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -63,6 +64,8 @@
         </preBuild>
       </makefileType>
       <item path="src/main.c" ex="false" tool="0" flavor2="9">
+      </item>
+      <item path="src/z80_rsc.s80" ex="false" tool="4" flavor2="0">
       </item>
     </conf>
     <conf name="Debug" type="0">

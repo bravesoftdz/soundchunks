@@ -1,0 +1,59 @@
+; Z80 driver for replaying RSE SoundChunks PCM streams
+; By GliGli
+
+; ###########################      define      ##############################
+
+            INCLUDE "z80_def.i80"   ; basic definitions
+
+; ###########################       var        ##############################
+
+RSCFLAGS    EQU     PARAMS+$00
+RSCBANK     EQU     PARAMS+$01
+
+WAVBUFFER0  EQU     $1E00           ; WAV buffer 0
+WAVBUFFER1  EQU     $1F00           ; WAV buffer 1
+
+
+; ###########################      macro       ##############################
+
+            INCLUDE "z80_mac.i80"  ; basic macros
+
+; ###########################       init       ##############################
+
+            ORG     $0000
+
+init:
+            DI                      ; disable ints
+            LD      SP, $2000       ; setup stack
+            IM      $01             ; set int mode 1
+            XOR     A
+            LD      (STATUS), A     ; driver not ready
+            LD      (COMMAND), A    ; command cleared
+            JP      start           ; jump to start
+
+
+; ###########################     interrupt    ##############################
+
+            BLOCK   $0038-$
+
+interrupt:                           ; do nothing in this program
+            RETI
+
+
+; ###########################       main       ##############################
+
+            BLOCK   $0200-$
+
+start:
+			
+
+			LD		A, (RSCBANK)
+			setBankFast
+
+
+            LD      HL, PARAMS
+
+main_loop:
+            JP      main_loop
+
+            END
