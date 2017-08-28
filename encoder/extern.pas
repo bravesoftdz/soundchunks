@@ -10,7 +10,8 @@ uses
 type
   TDoubleDynArray2 = array of TDoubleDynArray;
 
-procedure DoExternalKMeans(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount, Precision: Integer; AlternateMethod, PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalSKLearn(XY: TDoubleDynArray2;  DesiredNbTiles, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalYakmo(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
 implementation
@@ -129,8 +130,8 @@ begin
   end;
 end;
 
-procedure DoExternalKMeans(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount, Precision: Integer; AlternateMethod,
-  PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalSKLearn(XY: TDoubleDynArray2; DesiredNbTiles, Precision: Integer; PrintProgress: Boolean;
+  var XYC: TIntegerDynArray);
 var
   i, j, Clu, Inp, st: Integer;
   InFN, Line, Output, ErrOut: String;
@@ -173,8 +174,6 @@ begin
     Process.Parameters.Add('-i "' + InFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)));
     if PrintProgress then
       Process.Parameters.Add('-d');
-    if AlternateMethod then
-      Process.Parameters.Add('-a');
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
@@ -200,6 +199,60 @@ begin
   end;
 end;
 
+procedure DoExternalYakmo(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount: Integer; PrintProgress: Boolean;
+  var XYC: TIntegerDynArray);
+var
+  i, j, Clu, Inp: Integer;
+  InFN, Line, Output, ErrOut: String;
+  SL: TStringList;
+  Process: TProcess;
+  OutputStream: TMemoryStream;
+begin
+  Process := TProcess.Create(nil);
+  SL := TStringList.Create;
+  OutputStream := TMemoryStream.Create;
+  try
+    for i := 0 to High(XY) do
+    begin
+      Line := IntToStr(i) + ' ';
+      for j := 0 to High(XY[0]) do
+        Line := Line + IntToStr(j) + ':' + FloatToStr(XY[i, j]) + ' ';
+      SL.Add(Line);
+    end;
+
+    InFN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
+    SL.SaveToFile(InFN);
+    SL.Clear;
+
+    Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
+    Process.Executable := 'yakmo.exe';
+    Process.Parameters.Add('"' + InFN + '" - - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount));
+    Process.ShowWindow := swoHIDE;
+    Process.Priority := ppIdle;
+
+    i := 0;
+    internalRuncommand(Process, Output, ErrOut, i, PrintProgress); // destroys Process
+
+    DeleteFile(PChar(InFN));
+
+    if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
+      SL.LineBreak := #10;
+
+    SL.Text := Output;
+
+    SetLength(XYC, SL.Count);
+    for i := 0 to SL.Count - 1 do
+    begin
+      Line := SL[i];
+      if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
+          TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
+        XYC[Inp] := Clu;
+    end;
+  finally
+    OutputStream.Free;
+    SL.Free;
+  end;
+end;
 
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 var

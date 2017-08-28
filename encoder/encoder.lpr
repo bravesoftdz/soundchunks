@@ -191,6 +191,15 @@ type
 
 function IsDebuggerPresent () : LongBool stdcall; external 'kernel32.dll';
 
+function HasParam(p: String): Boolean;
+var i: Integer;
+begin
+  Result := False;
+  for i := 3 to ParamCount do
+    if SameText(p, ParamStr(i)) then
+      Exit(True);
+end;
+
 function ParamStart(p: String): Integer;
 var i: Integer;
 begin
@@ -377,7 +386,10 @@ begin
     for j := 0 to frame.encoder.chunkSize - 1 do
       XY[i, j] := chunks[i].dct[j];
 
-  DoExternalKMeans(XY, frame.encoder.ChunksPerBand, 1, prec, AlternateReduceMethod, False, XYC);
+  if AlternateReduceMethod then
+    DoExternalSKLearn(XY, frame.encoder.ChunksPerBand, prec, False, XYC)
+  else
+    DoExternalYakmo(XY, frame.encoder.ChunksPerBand, 1, False, XYC);
 
   reducedChunks.Clear;
   reducedChunks.Capacity := frame.encoder.ChunksPerBand;
@@ -634,7 +646,12 @@ begin
 
       for k := 0 to cl.Count - 1 do
         for l := ChunkSize - 1 downto 0 do
-          AStream.WriteByte(cl[k].dstData[l]);
+        begin
+          if l < Length(cl[k].dstData) then
+            AStream.WriteByte(cl[k].dstData[l])
+          else
+            AStream.WriteByte($80);
+        end;
     end;
 
     for j := 0 to BandCount - 1 do
@@ -650,10 +667,7 @@ begin
           begin
             b := b shl 1;
             if l < cl.Count then
-            begin
-              assert(cl[l].dstBitShift in [7, 8]);
               b := b or (cl[l].dstBitShift shr 3);
-            end;
           end;
           AStream.WriteByte(b);
         end;
@@ -1216,12 +1230,12 @@ begin
       enc.Precision := round(ParamValue('-pr', enc.Precision));
       enc.LowCut :=  ParamValue('-lc', enc.LowCut);
       enc.HighCut :=  ParamValue('-hc', enc.HighCut);
-      enc.TrebleBoost := ParamStart('-tb') <> -1;
+      enc.TrebleBoost := HasParam('-tb');
       enc.VariableFrameSizeRatio :=  ParamValue('-vfr', enc.VariableFrameSizeRatio);
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.ChunkSize :=  round(ParamValue('-cs', enc.ChunkSize));
-      enc.verbose := ParamStart('-v') <> -1;
-      enc.AlternateReduce := ParamStart('-ar') <> -1;
+      enc.verbose := HasParam('-v');
+      enc.AlternateReduce := HasParam('-ar');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('Precision = ', enc.Precision);

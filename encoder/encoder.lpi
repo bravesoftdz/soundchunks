@@ -109,7 +109,7 @@
     <RunParams>
       <local>
         <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -py -v"/>
+        <CommandLineParams Value="..\my_test\kav26.wav ..\outkt.wav -v -br64 -vfr0.98"/>
       </local>
     </RunParams>
     <Units Count="4">
