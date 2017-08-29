@@ -9,10 +9,17 @@
 
 RSCFLAGS	EQU	PARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
 RSCBANK		EQU	PARAMS+0x01
-RSCIDXCNT	EQU	PARAMS+0x02
 
-WAVBUFFER0  EQU	    0x1E00	    ; WAV buffer 0
-WAVBUFFER1  EQU	    0x1F00	    ; WAV buffer 1
+SAMPLES_PER_CHUNK_SHIFT		EQU	2
+SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
+CHUNKS_PER_FRAME		EQU	256
+
+CHUNKBUFFER0	EQU	0x0800
+CHUNKBUFFER1	EQU	0x0C00
+INDEXBUFFER	EQU	0x1000
+
+CHUNKBUFFER_SZ	EQU	(CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK)
+INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
 
 ; ###########################	   macro       ##############################
 
@@ -26,6 +33,10 @@ WAVBUFFER1  EQU	    0x1F00	    ; WAV buffer 1
 	LD	(HL), addr
 	INC	L
 	LD	(HL), data
+	DEC	L
+
+.wait:	BIT	7, (HL)
+	JP	NZ, .wait
 
 	endm
 	
@@ -37,50 +48,142 @@ WAVBUFFER1  EQU	    0x1F00	    ; WAV buffer 1
 	LD	(HL), addr
 	INC	L
 	LD	(HL), data
+	DEC	L
+
+.wait:	BIT	7, (HL)
+	JP	NZ, .wait
 
 	endm
 	
-	; 8bit sample in C
+	; 8bit sample in A
 	macro	ymWSH
 	
-	LD	HL, YMPORT0
-
 	LD	(HL), 0x2a
 	INC	L
-	LD	(YMPORT1), A
+	LD	(HL), A
+	DEC	L
 
 	endm
 
 	; 9th sample bit in Carry
 	macro	ymWSL
 	
-	LD	HL, YMPORT0
-
-	LD	(HL), 0x2a
-	RLA
-	RLA
-	RLA
-	RLA
-	AND	0x08
+	LD	(HL), 0x2c
 	INC	L
+	
+	SBC	A, A
+	AND	0x08
+
 	LD	(HL), A
+	DEC	L
+
+	endm
+
+
+	macro	ymWSL1
+	
+	LD	(HL), 0x2c
+	INC	L
+	LD	(HL), 0x08
+	DEC	L
 
 	endm
 
 	; wait YM2612 timer A and reset it
 	macro	ymWT
 	
-	LD	HL, YMPORT0
-	
-wait:	BIT	0, (HL)
-	JP	NZ, wait
+.wait:	BIT	0, (HL)
+	JP	Z, .wait
 	
 	LD	(HL), 0x27
 	INC	L
 	LD	(HL), 0x15
+	DEC	L
 	
 	endm
 	
+	; play a chunk sample in 8bit mode
+	macro	playHiSample
+	
+	LD	A, (DE)
+	ymWSL1
+	ymWSH
+
+	ymWT
+
+	endm
+	
+	; play a chunk sample in 9bit mode
+	macro	playLoSample
+
+	LD	A, (DE)
+	SRL	A
+	LD	B, A
+	ymWSL
+	LD	A, B
+	ADD	64
+	ymWSH
+
+	ymWT
+
+	endm
+
+	; play a chunk
+	macro	playChunk
+	
+	; compute sample address
+
+	SRL	H
+	SRL	H
+	RLA
+	RL	H
+	RLA
+	RL	H
+	OR	3
+	LD	L, A
+
+	; play the chunk samples
+
+	EX	DE, HL
+
+	SLA	C
+	JP	NC, .lo_sample
+	playHiSample
+	DEC	E
+	playHiSample
+	DEC	E
+	playHiSample
+	DEC	E
+	playHiSample
+	JP	.sample_end
+.lo_sample:
+	playLoSample
+	DEC	E
+	playLoSample
+	DEC	E
+	playLoSample
+	DEC	E
+	playLoSample
+.sample_end:
+
+	EX	DE, HL
+
+	; check for end of frame
+
+	DEC	IY
+	LD	A, IYL
+	OR	IYH
+	JP	NZ, .no_end_of_frame
+
+	LD	A, (RSCFLAGS)
+	OR	4
+	LD	(RSCFLAGS), A
+.lp:	JR	.lp	
+	
+
+.no_end_of_frame:
+
+	endm
 
 ; ###########################	    init       ##############################
 
@@ -119,19 +222,46 @@ start:
 	setBankFast
 
 	; Enable DAC
-	ymW0 0x2b, 0x80
+	ymW0	0x2b, 0x80
 	
 	; DAC Pan = LR
-	ymW1 0xb6, 0xc0
+	ymW1	0xb6, 0xc0
 
 	; Timer A enabled @ 26390Hz
-	ymW0 0x24, 0xff
-	ymW0 0x25, 0x02
-	ymW0 0x27, 0x15
+	ymW0	0x24, 0xff
+	ymW0	0x25, 0x02
+	ymW0	0x27, 0x15
 
 	; DAC init sample
-	ymW0 0x2c, 0x08
-	ymW0 0x2a, 0x80
+	ymW0	0x2a, 0x80
+	ymW0	0x2c, 0x08
+
+	; preload buffers
+	
+	LD	HL, 0x8000
+	
+	LD	A, (HL)
+	LD	IYL, A
+	INC	L
+	LD	A, (HL)
+	LD	IYH, A
+	INC	L
+
+	LD	DE, CHUNKBUFFER0
+	LD	BC, CHUNKBUFFER_SZ
+	LDIR
+
+	LD	DE, INDEXBUFFER
+	LD	BC, INDEXBUFFER_SZ
+	LDIR
+	
+	LD	SP, INDEXBUFFER
+	LD	IY, INDEXBUFFER_SZ	;TMPTMPTMPTMP
+;	LD	SP, HL			;TMPTMPTMPTMP
+
+	LD	IXH, 1
+	LD	HL, CHUNKBUFFER0
+	LD	DE, YMPORT0
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
@@ -139,6 +269,33 @@ start:
 	LD	(RSCFLAGS), A
 
 main_loop:
+	; handle 68k track stop request
+
+	LD	A, (RSCFLAGS)
+	AND	8
+	JP	Z, no_stop
+
+	LD	A, (RSCFLAGS)
+	AND	0xf7
+	OR	4
+	LD	(RSCFLAGS), A
+no_stop:
+	
+	DEC	IXH
+	JP	NZ, no_load_bit_shift
+	
+	LD	IXH, 8
+
+	; load bit shift for 8 chunk idxs
+	POP	BC
+	DEC	SP
+
+no_load_bit_shift:
+
+	DEC	SP
+	POP	AF
+	playChunk
+
 	JP	main_loop
 
 	END

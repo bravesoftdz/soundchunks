@@ -8,7 +8,7 @@
 #define RSC_SAMPLES_PER_CHUNK (1 << RSC_SAMPLES_PER_CHUNK_SHIFT)
 #define RSC_CHUNKS_PER_FRAME 256
 
-#define USE_RSC_REF_DECODER
+//#define USE_RSC_REF_DECODER
 
 int main()
 {
@@ -56,7 +56,7 @@ int main()
 		while(*ymA0 & 0x80);
 	}
 	
-	u8 track = 0;
+	u8 track = 1;
 	
 start:	
 	VDP_clearPlan(PLAN_A, TRUE);
@@ -72,6 +72,11 @@ start:
 
 	track = track % 3;
 	
+	do
+	{
+		JOY_update();
+	} while(JOY_readJoypad(0) & BUTTON_A);	
+
 	switch(track)
 	{
 	case 0:
@@ -104,14 +109,9 @@ start:
 	ymW0(0x27, 0x15);
 
 	// DAC init sample
-	ymW0(0x2c, 0x08);
 	ymW0(0x2a, 0x80);
+	ymW0(0x2c, 0x08);
 	
-	do
-	{
-		JOY_update();
-	} while(JOY_readJoypad(0) & BUTTON_A);	
-
 	u8 *chunks = &rsc[2];
 	u16 idxCnt = 0, bsCtr = 0, phase = 0, curChunkOff = 0;
 	u8 bitShift, sample;
