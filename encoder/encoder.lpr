@@ -2,10 +2,11 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, fft, conv, anysort, minlbfgs, kmeans, correlation;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, anysort;
 
 const
   BandCount = 1;
+  MDSampleRate = 26390;
 
 type
   TEncoder = class;
@@ -142,10 +143,9 @@ type
 
     SampleRate: Integer;
     SampleCount: Integer;
-    projectedByteSize, frameCount: Integer;
-    verbose: Boolean;
-
-    BWSearch, CRSearch: Boolean;
+    BlockSampleCount: Integer;
+    ProjectedByteSize, FrameCount: Integer;
+    Verbose: Boolean;
 
     srcHeader: array[$00..$2b] of Byte;
     srcData: TSmallIntDynArray;
@@ -228,9 +228,9 @@ begin
   ChunkCount := (endSample - startSample + 1 - 1) div encoder.ChunkSize + 1;
   SampleCount := endSample - startSample + 1;
 
-  Assert(ChunkCount < 65536, 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
+  Assert(ChunkCount < 65536 * trunc(8 / log2(encoder.OutputBitDepth - 7)), 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
 
-  if encoder.verbose and not (encoder.BWSearch or encoder.CRSearch) then
+  if encoder.Verbose then
   begin
     WriteLn('Frame #', index, #9, ChunkCount);
   end;
@@ -258,12 +258,8 @@ begin
 
   for i := 0 to BandCount - 1 do
   begin
-    if not encoder.CRSearch then
-    begin
-      bands[i].KMeansReduce;
-      bands[i].SortAndReindexReducedChunks;
-    end;
-
+    bands[i].KMeansReduce;
+    bands[i].SortAndReindexReducedChunks;
     bands[i].MakeDstData;
   end;
 
@@ -344,8 +340,7 @@ begin
     chunk := TChunk.Create(Self, i);
     chunk.ComputeBitRange;
     chunk.MakeDstData;
-    if not frame.encoder.CRSearch then
-      chunk.ComputeDCT;
+    chunk.ComputeDCT;
     chunks.Add(chunk);
   end;
 end;
@@ -581,8 +576,6 @@ begin
   end;
 
   SampleRate := PInteger(@srcHeader[$18])^;
-  writeln('SampleRate = ', SampleRate);
-  WriteLn('SampleCount = ', SampleCount);
 end;
 
 procedure TEncoder.SaveWAV;
@@ -592,8 +585,7 @@ var
 begin
   wavFN := ChangeFileExt(outputFN, '.wav');
 
-  if not CRSearch then
-    WriteLn('Save ', wavFN);
+  WriteLn('Save ', wavFN);
 
   fs := TFileStream.Create(wavFN, fmCreate or fmShareDenyWrite);
   try
@@ -636,11 +628,12 @@ var
   a, b : Integer;
   cl: TChunkList;
 begin
-  for i := 0 to frameCount - 1 do
+  for i := 0 to FrameCount - 1 do
   begin
     for j := 0 to BandCount - 1 do
     begin
-      AStream.WriteWord(frames[i].bands[j].chunks.Count);
+      Assert(frames[i].bands[j].chunks.Count mod (BlockSampleCount div ChunkSize) = 0);
+      AStream.WriteWord(frames[i].bands[j].chunks.Count div (BlockSampleCount div ChunkSize));
 
       cl := frames[i].bands[j].reducedChunks;
       if cl.Count = 0 then
@@ -776,7 +769,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 var
-  i, k, blockSampleCount, fixedCost, frameCost, nextStart: Integer;
+  i, k, fixedCost, frameCost, nextStart, psc: Integer;
   frm: TFrame;
   avgPower, totalPower, perFramePower, curPower: Double;
 begin
@@ -784,12 +777,20 @@ begin
 
   // pass 1
 
-  blockSampleCount := 0;
+  BlockSampleCount := 0;
   for i := 0 to BandCount - 1 do
-    if bandData[i].underSample > blockSampleCount then
-      blockSampleCount := bandData[i].underSample * ChunkSize;
+    if bandData[i].underSample * ChunkSize > BlockSampleCount then
+      BlockSampleCount := bandData[i].underSample * ChunkSize;
+  BlockSampleCount := Max(trunc(8 / log2(OutputBitDepth - 7)) * ChunkSize, BlockSampleCount);
 
-  projectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
+  // ensure srcData ends on a full block
+  psc := SampleCount;
+  SampleCount := ((SampleCount - 1) div BlockSampleCount + 1) * BlockSampleCount;
+  SetLength(srcData, SampleCount);
+  for i :=psc to SampleCount - 1 do
+    srcData[i] := 0;
+
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
 
   fixedCost := 0;
   frameCost := 0;
@@ -799,19 +800,20 @@ begin
     frameCost += ChunksPerBand * ChunkSize;
   end;
 
-  frameCount := (projectedByteSize - fixedCost - 1) div frameCost + 1;
+  FrameCount := (ProjectedByteSize - fixedCost - 1) div frameCost + 1;
 
-  projectedByteSize := fixedCost + frameCount * frameCost;
+  ProjectedByteSize := fixedCost + FrameCount * frameCost;
 
-  if not (BWSearch or CRSearch) then
-    writeln('FrameCount = ', frameCount);
+  writeln('SampleRate = ', SampleRate, ifthen(SampleRate <> MDSampleRate, ' /!\ Won''t play properly on MegaDrive'));
+  writeln('FrameCount = ', FrameCount);
 
-  Assert(frameCount > 0, 'Negative FrameCount! (BitRate too low)');
+  Assert(FrameCount > 0, 'Negative FrameCount! (BitRate too low)');
 
-  if verbose and not (BWSearch or CRSearch) then
+  if Verbose then
   begin
-    writeln('FrameSize = ', projectedByteSize div frameCount);
-    writeln('ProjectedByteSize = ', projectedByteSize);
+    WriteLn('SampleCount = ', SampleCount);
+    writeln('FrameSize = ', ProjectedByteSize div FrameCount);
+    writeln('ProjectedByteSize = ', ProjectedByteSize);
     writeln('ChunkSize = ', ChunkSize);
   end;
 
@@ -828,9 +830,9 @@ begin
   for i := 0 to SampleCount - 1 do
     totalPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
 
-  perFramePower := totalPower / frameCount;
+  perFramePower := totalPower / FrameCount;
 
-  if verbose and not (BWSearch or CRSearch) then
+  if Verbose then
   begin
     writeln('TotalPower = ', FormatFloat('0.00', totalPower));
     writeln('PerFramePower = ', FormatFloat('0.00', perFramePower));
@@ -843,7 +845,7 @@ begin
   begin
     curPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
 
-    if (i mod blockSampleCount = 0) and (curPower >= perFramePower) then
+    if (i mod BlockSampleCount = 0) and (curPower >= perFramePower) then
     begin
       frm := TFrame.Create(Self, k, nextStart, i - 1);
       frames.Add(frm);
@@ -857,9 +859,8 @@ begin
   frm := TFrame.Create(Self, k, nextStart, SampleCount - 1);
   frames.Add(frm);
 
-  if not (BWSearch or CRSearch) then
-    for i := 0 to BandCount - 1 do
-       WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].underSample);
+  for i := 0 to BandCount - 1 do
+     WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].underSample);
 end;
 
 procedure TEncoder.MakeFrames;
@@ -873,9 +874,8 @@ procedure TEncoder.MakeFrames;
     frm.MakeBands;
   end;
 begin
-  ProcThreadPool.DoParallelLocalProc(@DoFrame, 0, frameCount - 1, nil);
-  if not CRSearch then
-    WriteLn;
+  ProcThreadPool.DoParallelLocalProc(@DoFrame, 0, FrameCount - 1, nil);
+  WriteLn;
 end;
 
 function TEncoder.DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynArray;
@@ -949,8 +949,7 @@ var
   bnd: TBandGlobalData;
   lp: array[0 .. BandCount - 1] of TCICFilter;
 begin
-  if not (BWSearch or CRSearch) then
-    WriteLn('MakeDstData');
+  WriteLn('MakeDstData');
 
   SetLength(dstData, SampleCount);
   FillWord(dstData[0], Length(dstData), 0);
@@ -1243,7 +1242,7 @@ begin
       enc.VariableFrameSizeRatio :=  ParamValue('-vfr', enc.VariableFrameSizeRatio);
       enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
       enc.ChunkSize :=  round(ParamValue('-cs', enc.ChunkSize));
-      enc.verbose := HasParam('-v');
+      enc.Verbose := HasParam('-v');
       enc.AlternateReduce := HasParam('-ar');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
@@ -1251,7 +1250,7 @@ begin
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
       WriteLn('TrebleBoost = ', BoolToStr(enc.TrebleBoost, True));
       WriteLn('VariableFrameSizeRatio = ', FloatToStr(enc.VariableFrameSizeRatio));
-      if enc.verbose then
+      if enc.Verbose then
       begin
         WriteLn('ChunkSize = ', enc.ChunkSize);
         WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));

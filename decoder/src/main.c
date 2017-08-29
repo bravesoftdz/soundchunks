@@ -8,7 +8,7 @@
 #define RSC_SAMPLES_PER_CHUNK (1 << RSC_SAMPLES_PER_CHUNK_SHIFT)
 #define RSC_CHUNKS_PER_FRAME 256
 
-//#define USE_RSC_REF_DECODER
+#define USE_RSC_REF_DECODER
 
 int main()
 {
@@ -113,42 +113,40 @@ start:
 	ymW0(0x2c, 0x08);
 	
 	u8 *chunks = &rsc[2];
-	u16 idxCnt = 0, bsCtr = 0, phase = 0, curChunkOff = 0;
-	u8 bitShift, sample;
+	u16 blkCnt = 0, curChunkOff = 0;
+	u8 sample, bitShift = 0, bsCtr = 0, phase = 0;
 	for(;;)
 	{
 		if(!phase)
 		{
-			if (!idxCnt)
-			{
-				idxCnt = *rsc++;
-				idxCnt |= (*rsc++) << 8;
-				
-				JOY_update();
-				if (!idxCnt || (JOY_readJoypad(0) & BUTTON_A))
-				{
-					track++;
-					goto start;
-				}
-
-				chunks = rsc;
-				rsc += RSC_SAMPLES_PER_CHUNK * RSC_CHUNKS_PER_FRAME;
-				bsCtr = 0;
-				phase = 0;
-			}
-			
 			bitShift <<= 1;
 
 			if (!bsCtr)
 			{
+				if (!blkCnt)
+				{
+					blkCnt = *rsc++;
+					blkCnt |= (*rsc++) << 8;
+
+					JOY_update();
+					if (!blkCnt || (JOY_readJoypad(0) & BUTTON_A))
+					{
+						track++;
+						goto start;
+					}
+
+					chunks = rsc;
+					rsc += RSC_SAMPLES_PER_CHUNK * RSC_CHUNKS_PER_FRAME;
+				}
+
 				bitShift = *rsc++;
 				bsCtr = 8;
+				blkCnt--;
 			}
 
 			curChunkOff = (*rsc++) << RSC_SAMPLES_PER_CHUNK_SHIFT;
 			phase = RSC_SAMPLES_PER_CHUNK;
 			bsCtr--;
-			idxCnt--;
 		}
 		
 		phase--;
