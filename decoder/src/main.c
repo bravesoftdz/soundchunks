@@ -8,7 +8,7 @@
 #define RSC_SAMPLES_PER_CHUNK (1 << RSC_SAMPLES_PER_CHUNK_SHIFT)
 #define RSC_CHUNKS_PER_FRAME 256
 
-#define USE_RSC_REF_DECODER
+//#define USE_RSC_REF_DECODER
 
 int main()
 {
@@ -117,7 +117,7 @@ start:
 	u8 sample, bitShift = 0, bsCtr = 0, phase = 0;
 	for(;;)
 	{
-		if(!phase)
+		if(phase >= RSC_SAMPLES_PER_CHUNK)
 		{
 			bitShift <<= 1;
 
@@ -145,11 +145,9 @@ start:
 			}
 
 			curChunkOff = (*rsc++) << RSC_SAMPLES_PER_CHUNK_SHIFT;
-			phase = RSC_SAMPLES_PER_CHUNK;
+			phase = 0;
 			bsCtr--;
 		}
-		
-		phase--;
 		
 		sample = chunks[curChunkOff + phase];
 		if (bitShift & 0x80)
@@ -163,6 +161,8 @@ start:
 			ymWSL(sample & 1);
 		}
 
+		phase++;
+		
 		ymWT();
 	}
 #else

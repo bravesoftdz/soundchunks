@@ -7,8 +7,10 @@
 
 ; ###########################	    var	       ##############################
 
-RSCFLAGS	EQU	PARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
-RSCBANK		EQU	PARAMS+0x01
+RSCPARAMS	EQU	0x18
+
+RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
+RSCBANK		EQU	RSCPARAMS+0x01
 
 SAMPLES_PER_CHUNK_SHIFT		EQU	2
 SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
@@ -19,7 +21,7 @@ CHUNKBUFFER1	EQU	0x0C00
 INDEXBUFFER	EQU	0x1000
 
 CHUNKBUFFER_SZ	EQU	(CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK)
-INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
+INDEXBUFFER_SZ	EQU	455 * 9
 
 ; ###########################	   macro       ##############################
 
@@ -55,12 +57,12 @@ INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
 
 	endm
 	
-	; 8bit sample in A
-	macro	ymWSH
+	; 8bit sample in smp
+	macro	ymWSH smp
 	
-	LD	(HL), 0x2a
+	LD	(HL), D
 	INC	L
-	LD	(HL), A
+	LD	(HL), smp
 	DEC	L
 
 	endm
@@ -68,23 +70,23 @@ INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
 	; 9th sample bit in Carry
 	macro	ymWSL
 	
-	LD	(HL), 0x2c
+	LD	(HL), E
 	INC	L
-	
+
 	SBC	A, A
-	AND	0x08
+	AND	L		; L = 0x9 here, so it's fine to write the 9th DAC bit
 
 	LD	(HL), A
 	DEC	L
 
 	endm
 
-
 	macro	ymWSL1
 	
-	LD	(HL), 0x2c
+	LD	(HL), E
 	INC	L
-	LD	(HL), 0x08
+	
+	LD	(HL), L		; L = 0x9 here, so it's fine to write the 9th DAC bit
 	DEC	L
 
 	endm
@@ -97,91 +99,32 @@ INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
 	
 	LD	(HL), 0x27
 	INC	L
+
 	LD	(HL), 0x15
 	DEC	L
 	
 	endm
 	
 	; play a chunk sample in 8bit mode
-	macro	playHiSample
+	macro	playHiSample smp
 	
-	LD	A, (DE)
 	ymWSL1
-	ymWSH
+	ymWSH smp
 
 	ymWT
 
 	endm
 	
 	; play a chunk sample in 9bit mode
-	macro	playLoSample
+	macro	playLoSample smp
 
-	LD	A, (DE)
-	SRL	A
-	LD	B, A
+	SRL	smp
 	ymWSL
-	LD	A, B
-	ADD	64
-	ymWSH
+	LD	A, smp
+	ADD	H		; H = 64 here
+	ymWSH A
 
 	ymWT
-
-	endm
-
-	; play a chunk
-	macro	playChunk
-	
-	; compute sample address
-
-	SRL	H
-	SRL	H
-	RLA
-	RL	H
-	RLA
-	RL	H
-	OR	3
-	LD	L, A
-
-	; play the chunk samples
-
-	EX	DE, HL
-
-	SLA	C
-	JP	NC, .lo_sample
-	playHiSample
-	DEC	E
-	playHiSample
-	DEC	E
-	playHiSample
-	DEC	E
-	playHiSample
-	JP	.sample_end
-.lo_sample:
-	playLoSample
-	DEC	E
-	playLoSample
-	DEC	E
-	playLoSample
-	DEC	E
-	playLoSample
-.sample_end:
-
-	EX	DE, HL
-
-	; check for end of frame
-
-	DEC	IY
-	LD	A, IYL
-	OR	IYH
-	JP	NZ, .no_end_of_frame
-
-	LD	A, (RSCFLAGS)
-	OR	4
-	LD	(RSCFLAGS), A
-.lp:	JR	.lp	
-	
-
-.no_end_of_frame:
 
 	endm
 
@@ -191,11 +134,7 @@ INDEXBUFFER_SZ	EQU	($2000 - INDEXBUFFER)
 
 init:
 	DI			; disable ints
-	LD	SP, 0x2000	; setup stack
 	IM	0x01		; set int mode 1
-	XOR	A
-	LD	(STATUS), A	; driver not ready
-	LD	(COMMAND), A	; command cleared
 	JP	start		; jump to start
 
 
@@ -208,8 +147,6 @@ interrupt:			     ; do nothing in this program
 
 
 ; ###########################	    main       ##############################
-
-	BLOCK	0x0200-$
 
 start:
 	; wait for 68k side init
@@ -236,6 +173,12 @@ start:
 	ymW0	0x2a, 0x80
 	ymW0	0x2c, 0x08
 
+	; init player
+	EXX
+	LD	DE, 0x2a2c
+	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
+	EXX
+
 	; preload buffers
 	
 	LD	HL, 0x8000
@@ -251,51 +194,108 @@ start:
 	LD	BC, CHUNKBUFFER_SZ
 	LDIR
 
+	LD	A, H
+	LD	IXH, A
+	LD	A, L
+	LD	IXL, A
+restart:	
+	LD	A, IXH
+	LD	H, A
+	LD	A, IXL
+	LD	L, A
+
 	LD	DE, INDEXBUFFER
 	LD	BC, INDEXBUFFER_SZ
+	ADD	IX, BC
 	LDIR
-	
-	LD	SP, INDEXBUFFER
-	LD	IY, INDEXBUFFER_SZ	;TMPTMPTMPTMP
-;	LD	SP, HL			;TMPTMPTMPTMP
 
-	LD	IXH, 1
+	LD	DE, INDEXBUFFER
 	LD	HL, CHUNKBUFFER0
-	LD	DE, YMPORT0
+	LD	IY, INDEXBUFFER_SZ / 9
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
 	OR	2
 	LD	(RSCFLAGS), A
 
-main_loop:
 	; handle 68k track stop request
 
 	LD	A, (RSCFLAGS)
 	AND	8
-	JP	Z, no_stop
+	JP	Z, main_loop
 
 	LD	A, (RSCFLAGS)
-	AND	0xf7
 	OR	4
 	LD	(RSCFLAGS), A
-no_stop:
+
+stop:	JR	stop
+
+chunkIdx_loSmp:
+	POP	BC
+	playLoSample C
+	playLoSample B
+	POP	BC
+	playLoSample C
+	playLoSample B
+	EXX
 	
-	DEC	IXH
-	JP	NZ, no_load_bit_shift
+	DJNZ	chunkIdx_loop
+
+	; main loop, one 8 chunks block at a time
+
+main_loop:
 	
-	LD	IXH, 8
+	; check for end of frame
+
+	DEC	IY
+	LD	A, IYL
+	OR	IYH
+	JP	Z, restart
 
 	; load bit shift for 8 chunk idxs
+	LD	A, (DE)
+	LD	C, A
+	INC	DE
+
+	LD	B, 8
+	JP	chunkIdx_loop
+
+chunkIdx_loop:
+
+	; load chunk index
+
+	LD	A, (DE)
+	INC	DE
+
+	; compute chunk address
+
+	LD	L, A
+	LD	A, H
+	RRA
+	RRA
+	SLA	L
+	RLA
+	SLA	L
+	RLA
+	LD	H, A
+
+	LD	SP, HL
+
+	; play the chunk samples
+
+	SLA	C
+	EXX
+	JP	NC, chunkIdx_loSmp
+	
 	POP	BC
-	DEC	SP
+	playHiSample C
+	playHiSample B
+	POP	BC
+	playHiSample C
+	playHiSample B
+	EXX
 
-no_load_bit_shift:
-
-	DEC	SP
-	POP	AF
-	playChunk
-
+	DJNZ	chunkIdx_loop
 	JP	main_loop
 
 	END

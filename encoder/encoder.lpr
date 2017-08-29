@@ -640,7 +640,7 @@ begin
         cl := frames[i].bands[j].chunks;
 
       for k := 0 to cl.Count - 1 do
-        for l := ChunkSize - 1 downto 0 do
+        for l := 0 to ChunkSize - 1 do
         begin
           if l < Length(cl[k].dstData) then
             AStream.WriteByte(cl[k].dstData[l])
