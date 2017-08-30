@@ -11,6 +11,7 @@ RSCPARAMS	EQU	0x18
 
 RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
 RSCBANK		EQU	RSCPARAMS+0x01
+RSCBANKPOS	EQU	RSCPARAMS+0x02
 
 SAMPLES_PER_CHUNK_SHIFT		EQU	2
 SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
@@ -194,24 +195,20 @@ start:
 	LD	BC, CHUNKBUFFER_SZ
 	LDIR
 
-	LD	A, H
-	LD	IXH, A
-	LD	A, L
-	LD	IXL, A
+	LD	(RSCBANKPOS), HL
+
 restart:	
-	LD	A, IXH
-	LD	H, A
-	LD	A, IXL
-	LD	L, A
+	LD	HL, (RSCBANKPOS)
 
 	LD	DE, INDEXBUFFER
 	LD	BC, INDEXBUFFER_SZ
-	ADD	IX, BC
 	LDIR
 
+	LD	(RSCBANKPOS), HL
+
 	LD	DE, INDEXBUFFER
-	LD	HL, CHUNKBUFFER0
-	LD	IY, INDEXBUFFER_SZ / 9
+	LD	H, CHUNKBUFFER0 >> 10
+	LD	IY, (INDEXBUFFER_SZ / 9) + 0x0101
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
@@ -247,10 +244,13 @@ main_loop:
 	
 	; check for end of frame
 
-	DEC	IY
-	LD	A, IYL
-	OR	IYH
+	DEC	IYL
+	JP	NZ, no_eof
+
+	DEC	IYH
 	JP	Z, restart
+
+no_eof:
 
 	; load bit shift for 8 chunk idxs
 	LD	A, (DE)
@@ -258,7 +258,6 @@ main_loop:
 	INC	DE
 
 	LD	B, 8
-	JP	chunkIdx_loop
 
 chunkIdx_loop:
 
@@ -271,15 +270,12 @@ chunkIdx_loop:
 
 	LD	L, A
 	LD	A, H
-	RRA
-	RRA
-	SLA	L
-	RLA
-	SLA	L
-	RLA
-	LD	H, A
+	ADD	HL, HL
+	ADD	HL, HL
 
 	LD	SP, HL
+
+	LD	H, A
 
 	; play the chunk samples
 
