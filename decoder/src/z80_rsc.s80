@@ -7,22 +7,24 @@
 
 ; ###########################	    var	       ##############################
 
-RSCPARAMS	EQU	0x18
+RSCPARAMS	EQU	0x100
 
 RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
 RSCBANK		EQU	RSCPARAMS+0x01
-RSCBANKPOS	EQU	RSCPARAMS+0x02
+RSCBANKPOS	EQU	RSCPARAMS+0x02  // 15: "68k bus available" flag, managed by the 68k
+RSCFRAMELEFT	EQU	RSCPARAMS+0x04
 
 SAMPLES_PER_CHUNK_SHIFT		EQU	2
 SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
 CHUNKS_PER_FRAME		EQU	256
 
-CHUNKBUFFER0	EQU	0x0800
-CHUNKBUFFER1	EQU	0x0C00
-INDEXBUFFER	EQU	0x1000
+CHUNKBUFFER0	EQU	0x0400
+INDEXBUFFER0	EQU	0x0800
+CHUNKBUFFER1	EQU	0x1400
+INDEXBUFFER1	EQU	0x1800
 
 CHUNKBUFFER_SZ	EQU	(CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK)
-INDEXBUFFER_SZ	EQU	455 * 9
+INDEXBUFFER_SZ	EQU	256 * 9
 
 ; ###########################	   macro       ##############################
 
@@ -61,7 +63,7 @@ INDEXBUFFER_SZ	EQU	455 * 9
 	; 8bit sample in smp
 	macro	ymWSH smp
 	
-	LD	(HL), D
+	LD	(HL), 0x2a
 	INC	L
 	LD	(HL), smp
 	DEC	L
@@ -71,11 +73,11 @@ INDEXBUFFER_SZ	EQU	455 * 9
 	; 9th sample bit in Carry
 	macro	ymWSL
 	
-	LD	(HL), E
+	LD	(HL), 0x2c
 	INC	L
 
 	SBC	A, A
-	AND	L		; L = 0x9 here, so it's fine to write the 9th DAC bit
+	AND	L		; L = 9 here, so it's fine to write the 9th DAC bit (which is bit 3; bit 0 is ignored)
 
 	LD	(HL), A
 	DEC	L
@@ -84,20 +86,20 @@ INDEXBUFFER_SZ	EQU	455 * 9
 
 	macro	ymWSL1
 	
-	LD	(HL), E
+	LD	(HL), 0x2c
 	INC	L
 	
-	LD	(HL), L		; L = 0x9 here, so it's fine to write the 9th DAC bit
+	LD	(HL), L		; L = 9 here, so it's fine to write the 9th DAC bit (which is bit 3; bit 0 is ignored)
 	DEC	L
 
 	endm
 
 	; wait YM2612 timer A and reset it
 	macro	ymWT
-	
+
 .wait:	BIT	0, (HL)
-	JP	Z, .wait
-	
+	JR	Z, .wait
+
 	LD	(HL), 0x27
 	INC	L
 
@@ -105,19 +107,62 @@ INDEXBUFFER_SZ	EQU	455 * 9
 	DEC	L
 	
 	endm
+
+	; copy stream data to the next buffer when the 68k bus is available
+	macro	preloadBuffer
 	
+	LD	HL, (RSCBANKPOS)
+
+	LD	A, H
+	AND	IXH
+	JP	P, .busy_or_buffer_full
+
+	LDI
+	LDI
+	LDI
+
+	LD	(RSCBANKPOS), HL
+
+	INC	IX
+
+.busy_or_buffer_full:
+
+	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
+		
+	endm
+	
+	; run per sample background tasks
+	macro	sampleYield idx
+
+	if	idx == 0
+		; nothing (chunk change will take a bit of time already)
+	else
+	if	idx == 1
+		ymWT
+	else
+	if	idx == 2
+		preloadBuffer
+	else
+	; if	idx == 3
+		ymWT
+	endif
+	endif
+	endif
+
+	endm
+
 	; play a chunk sample in 8bit mode
-	macro	playHiSample smp
+	macro	playHiSample smp, idx
 	
 	ymWSL1
 	ymWSH smp
 
-	ymWT
+	sampleYield idx
 
 	endm
 	
 	; play a chunk sample in 9bit mode
-	macro	playLoSample smp
+	macro	playLoSample smp, idx
 
 	SRL	smp
 	ymWSL
@@ -125,7 +170,7 @@ INDEXBUFFER_SZ	EQU	455 * 9
 	ADD	H		; H = 64 here
 	ymWSH A
 
-	ymWT
+	sampleYield idx
 
 	endm
 
@@ -135,19 +180,12 @@ INDEXBUFFER_SZ	EQU	455 * 9
 
 init:
 	DI			; disable ints
-	IM	0x01		; set int mode 1
 	JP	start		; jump to start
 
 
-; ###########################	  interrupt    ##############################
-
-	BLOCK	0x0038-$
-
-interrupt:			     ; do nothing in this program
-	RETI
-
-
 ; ###########################	    main       ##############################
+
+	BLOCK	0x0110-$
 
 start:
 	; wait for 68k side init
@@ -165,55 +203,61 @@ start:
 	; DAC Pan = LR
 	ymW1	0xb6, 0xc0
 
-	; Timer A enabled @ 26390Hz
+	; Timer A enabled @ 26390Hz / 2
 	ymW0	0x24, 0xff
-	ymW0	0x25, 0x02
+	ymW0	0x25, 0x00
 	ymW0	0x27, 0x15
 
 	; DAC init sample
 	ymW0	0x2a, 0x80
 	ymW0	0x2c, 0x08
 
-	; init player
-	EXX
-	LD	DE, 0x2a2c
-	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
-	EXX
-
 	; preload buffers
 	
 	LD	HL, 0x8000
 	
-	LD	A, (HL)
-	LD	IYL, A
+	LD	E, (HL)
 	INC	L
-	LD	A, (HL)
-	LD	IYH, A
+	LD	D, (HL)
 	INC	L
+	LD	(RSCFRAMELEFT), DE
 
 	LD	DE, CHUNKBUFFER0
-	LD	BC, CHUNKBUFFER_SZ
+	LD	BC, CHUNKBUFFER_SZ + INDEXBUFFER_SZ
 	LDIR
 
-	LD	(RSCBANKPOS), HL
+	; init player
 
-restart:	
-	LD	HL, (RSCBANKPOS)
-
-	LD	DE, INDEXBUFFER
-	LD	BC, INDEXBUFFER_SZ
-	LDIR
+	EXX
+	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
+	EXX
 
 	LD	(RSCBANKPOS), HL
-
-	LD	DE, INDEXBUFFER
 	LD	H, CHUNKBUFFER0 >> 10
-	LD	IY, (INDEXBUFFER_SZ / 9) + 0x0101
+	LD	IYH, high INDEXBUFFER1
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
 	OR	2
 	LD	(RSCFLAGS), A
+
+restart:	
+	; double buffer handling / switch
+
+	LD	A, IYH
+	XOR	0x10
+	LD	IYH, A
+
+	LD	D, A
+	LD	E, 0
+	EXX
+	XOR	0x10
+	LD	D, A
+	LD	E, 0
+	EXX
+
+	LD	IX, 65536 - INDEXBUFFER_SZ / 3	; buffer preload counter
+	LD	IYL, 0				; block counter (256 blocks)
 
 	; handle 68k track stop request
 
@@ -225,15 +269,19 @@ restart:
 	OR	4
 	LD	(RSCFLAGS), A
 
-stop:	JR	stop
+	ymW0	0x2a, 0x80
+	ymW0	0x2c, 0x08
+
+stop_loop:
+	JR	stop_loop
 
 chunkIdx_loSmp:
 	POP	BC
-	playLoSample C
-	playLoSample B
+	playLoSample C, 0
+	playLoSample B, 1
 	POP	BC
-	playLoSample C
-	playLoSample B
+	playLoSample C, 2
+	playLoSample B, 3
 	EXX
 	
 	DJNZ	chunkIdx_loop
@@ -245,12 +293,7 @@ main_loop:
 	; check for end of frame
 
 	DEC	IYL
-	JP	NZ, no_eof
-
-	DEC	IYH
 	JP	Z, restart
-
-no_eof:
 
 	; load bit shift for 8 chunk idxs
 	LD	A, (DE)
@@ -284,11 +327,11 @@ chunkIdx_loop:
 	JP	NC, chunkIdx_loSmp
 	
 	POP	BC
-	playHiSample C
-	playHiSample B
+	playHiSample C, 0
+	playHiSample B, 1
 	POP	BC
-	playHiSample C
-	playHiSample B
+	playHiSample C, 2
+	playHiSample B, 3
 	EXX
 
 	DJNZ	chunkIdx_loop

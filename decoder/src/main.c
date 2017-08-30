@@ -56,7 +56,7 @@ int main()
 		while(*ymA0 & 0x80);
 	}
 	
-	u8 track = 1;
+	u8 track = 0;
 	
 start:	
 	VDP_clearPlan(PLAN_A, TRUE);
@@ -182,6 +182,10 @@ start:
 		}
 		
 		VDP_waitVSync();
+		
+		RSC_Set68kBusLockedFlag(TRUE);
+		DMA_doDma(DMA_VRAM, 0, TILE_USER, 4096, 2);
+		RSC_Set68kBusLockedFlag(FALSE);
 	}
 #endif
 
