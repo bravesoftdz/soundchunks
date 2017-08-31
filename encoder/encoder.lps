@@ -9,8 +9,8 @@
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="816"/>
-        <CursorPos X="67" Y="858"/>
+        <TopLine Value="729"/>
+        <CursorPos X="36" Y="770"/>
         <UsageCount Value="200"/>
         <Bookmarks Count="5">
           <Item0 X="14" Y="743" ID="3"/>
@@ -37,7 +37,7 @@
         <EditorIndex Value="-1"/>
         <TopLine Value="779"/>
         <CursorPos X="5" Y="839"/>
-        <UsageCount Value="151"/>
+        <UsageCount Value="152"/>
         <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit2>
       <Unit3>
@@ -46,7 +46,7 @@
         <EditorIndex Value="1"/>
         <TopLine Value="106"/>
         <CursorPos X="3" Y="144"/>
-        <UsageCount Value="51"/>
+        <UsageCount Value="52"/>
         <Loaded Value="True"/>
         <DefaultSyntaxHighlighter Value="Delphi"/>
       </Unit3>
@@ -138,7 +138,7 @@
     <OtherDefines Count="1">
       <Define0 Value="DEBUG"/>
     </OtherDefines>
-    <JumpHistory Count="23" HistoryIndex="22">
+    <JumpHistory Count="27" HistoryIndex="26">
       <Position1>
         <Filename Value="encoder.lpr"/>
         <Caret Line="391" TopLine="361"/>
@@ -231,6 +231,22 @@
         <Filename Value="encoder.lpr"/>
         <Caret Line="181" Column="15" TopLine="152"/>
       </Position23>
+      <Position24>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="865" Column="20" TopLine="816"/>
+      </Position24>
+      <Position25>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="176" Column="20" TopLine="151"/>
+      </Position25>
+      <Position26>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="684" Column="3" TopLine="680"/>
+      </Position26>
+      <Position27>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="179" Column="15" TopLine="146"/>
+      </Position27>
     </JumpHistory>
   </ProjectSession>
   <Debugging>

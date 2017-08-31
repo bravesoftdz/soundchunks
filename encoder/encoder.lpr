@@ -767,7 +767,7 @@ begin
     tbCoeffs := DoFilterCoeffs(tb, 1.0 - tb, True, True);
     tbData := DoFilter(bnd.filteredData, tbCoeffs);
     for j := 0 to High(bnd.filteredData) do
-      bnd.filteredData[j] += tbData[j];
+      bnd.filteredData[j] += 2.0 * tbData[j];
   end;
 
   bandData[AIndex] := bnd;
