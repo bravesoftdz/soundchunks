@@ -9,8 +9,8 @@
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="349"/>
-        <CursorPos X="114" Y="386"/>
+        <TopLine Value="816"/>
+        <CursorPos X="67" Y="858"/>
         <UsageCount Value="200"/>
         <Bookmarks Count="5">
           <Item0 X="14" Y="743" ID="3"/>
@@ -138,7 +138,7 @@
     <OtherDefines Count="1">
       <Define0 Value="DEBUG"/>
     </OtherDefines>
-    <JumpHistory Count="19" HistoryIndex="18">
+    <JumpHistory Count="23" HistoryIndex="22">
       <Position1>
         <Filename Value="encoder.lpr"/>
         <Caret Line="391" TopLine="361"/>
@@ -215,6 +215,22 @@
         <Filename Value="encoder.lpr"/>
         <Caret Line="98" Column="13" TopLine="76"/>
       </Position19>
+      <Position20>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="389" Column="88" TopLine="349"/>
+      </Position20>
+      <Position21>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="182" Column="18" TopLine="152"/>
+      </Position21>
+      <Position22>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="891" Column="3" TopLine="880"/>
+      </Position22>
+      <Position23>
+        <Filename Value="encoder.lpr"/>
+        <Caret Line="181" Column="15" TopLine="152"/>
+      </Position23>
     </JumpHistory>
   </ProjectSession>
   <Debugging>

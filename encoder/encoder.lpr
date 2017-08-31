@@ -835,12 +835,12 @@ begin
 
   avgPower := 0.0;
   for i := 0 to SampleCount - 1 do
-    avgPower += sqr(makeFloatSample(srcData[i]));
+    avgPower += abs(makeFloatSample(srcData[i]));
   avgPower /= BandCount * SampleCount;
 
   totalPower := 0.0;
   for i := 0 to SampleCount - 1 do
-    totalPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
+    totalPower += avgPower - avgPower * VariableFrameSizeRatio + abs(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
 
   perFramePower := totalPower / FrameCount;
 
@@ -855,7 +855,7 @@ begin
   curPower := 0.0;
   for i := 0 to SampleCount - 1 do
   begin
-    curPower += avgPower - avgPower * VariableFrameSizeRatio + sqr(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
+    curPower += avgPower - avgPower * VariableFrameSizeRatio + abs(VariableFrameSizeRatio * makeFloatSample(srcData[i]));
 
     if (i mod BlockSampleCount = 0) and (curPower >= perFramePower) then
     begin
