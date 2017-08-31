@@ -7,6 +7,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap
 const
   BandCount = 1;
   MDSampleRate = 26390;
+  MDCutoff = 3390;
 
 type
   TEncoder = class;
@@ -731,6 +732,8 @@ var
   bnd: TBandGlobalData;
   cic: TCICFilter;
   cicSmp: Double;
+  tbData, tbCoeffs: TDoubleDynArray;
+  tb: Double;
 begin
   bnd := bandData[AIndex];
 
@@ -742,7 +745,7 @@ begin
   bnd.filteredData := DoBPFilter(bnd.fcl, bnd.fch, BandTransFactor, bnd.filteredData);
   SetLength(bnd.filteredData, SampleCount);
 
-  if (AIndex < BandCount - 1) or TrebleBoost then
+  if AIndex < BandCount - 1 then
   begin
     // compensate for decoder altering the pass band (low pass)
     cic := TCICFilter.Create(bnd.fch, BandDenoiseStages, True);
@@ -756,6 +759,15 @@ begin
     finally
       cic.Free;
     end;
+  end;
+
+  if TrebleBoost then
+  begin
+    tb := MDCutoff / SampleRate;
+    tbCoeffs := DoFilterCoeffs(tb, 1.0 - tb, True, True);
+    tbData := DoFilter(bnd.filteredData, tbCoeffs);
+    for j := 0 to High(bnd.filteredData) do
+      bnd.filteredData[j] += tbData[j];
   end;
 
   bandData[AIndex] := bnd;
@@ -859,6 +871,8 @@ begin
   frm := TFrame.Create(Self, k, nextStart, SampleCount - 1);
   frames.Add(frm);
 
+  FrameCount := frames.Count;
+
   for i := 0 to BandCount - 1 do
      WriteLn('Band #', i, ' (', round(bandData[i].fcl * SampleRate), ' Hz .. ', round(bandData[i].fch * SampleRate), ' Hz); ', bandData[i].underSample);
 end;
@@ -917,13 +931,13 @@ begin
 
   BitRate := 128;
   Precision := 7;
-  LowCut := 32.0;
+  LowCut := 20.0;
   HighCut := 18000.0;
   OutputBitDepth := 9;
   ChunkSize := 4;
   AlternateReduce := False;
   TrebleBoost := False;
-  VariableFrameSizeRatio := 0.5;
+  VariableFrameSizeRatio := 0.0;
 
   StoredBitDepth := 8;
   ChunksPerBand := 256;
