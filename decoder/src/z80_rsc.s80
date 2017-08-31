@@ -11,8 +11,10 @@ RSCPARAMS	EQU	0x100
 
 RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
 RSCBANK		EQU	RSCPARAMS+0x01
-RSCBANKPOS	EQU	RSCPARAMS+0x02  // 15: "68k bus available" flag, managed by the 68k
+RSC68KLOCKED	EQU	RSCPARAMS+0x02  // 7: "68k bus locked" flag, managed by the 68k
+RSCCURIDXBUF	EQU	RSCPARAMS+0x03
 RSCFRAMELEFT	EQU	RSCPARAMS+0x04
+RSCTMP16BIT	EQU	RSCPARAMS+0x06
 
 SAMPLES_PER_CHUNK_SHIFT		EQU	2
 SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
@@ -111,23 +113,18 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	; copy stream data to the next buffer when the 68k bus is available
 	macro	preloadBuffer
 	
-	LD	HL, (RSCBANKPOS)
+	EXX		; *
 
-	LD	A, H
-	AND	IXH
-	JP	P, .busy_or_buffer_full
+	LD	A, (RSC68KLOCKED)
+	OR	B
+	RLCA
+	JR	C, .busy_or_buffer_full
 
 	LDI
-	LDI
-	LDI
-
-	LD	(RSCBANKPOS), HL
-
-	INC	IX
 
 .busy_or_buffer_full:
 
-	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
+	EXX		; *
 		
 	endm
 	
@@ -138,7 +135,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 		; nothing (chunk change will take a bit of time already)
 	else
 	if	idx == 1
-		ymWT
+		preloadBuffer
 	else
 	if	idx == 2
 		preloadBuffer
@@ -203,8 +200,8 @@ start:
 	; DAC Pan = LR
 	ymW1	0xb6, 0xc0
 
-	; Timer A enabled @ 26390Hz / 2
-	ymW0	0x24, 0xff
+	; Timer A enabled @ 26390Hz / 4
+	ymW0	0x24, 0xfe
 	ymW0	0x25, 0x00
 	ymW0	0x27, 0x15
 
@@ -228,13 +225,15 @@ start:
 
 	; init player
 
+	LD	(RSCTMP16BIT), HL
 	EXX
-	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
+	LD	HL, (RSCTMP16BIT)
 	EXX
 
-	LD	(RSCBANKPOS), HL
-	LD	H, CHUNKBUFFER0 >> 10
-	LD	IYH, high INDEXBUFFER1
+	LD	IYH, CHUNKBUFFER0 >> 10
+	LD	A, high INDEXBUFFER1
+	LD	(RSCCURIDXBUF), A
+	LD	HL, YMPORT0 + 8		; we need L = 8 for the algo and it points on a mirror
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
@@ -244,19 +243,19 @@ start:
 restart:	
 	; double buffer handling / switch
 
-	LD	A, IYH
+	LD	A, (RSCCURIDXBUF)
 	XOR	0x10
-	LD	IYH, A
+	LD	(RSCCURIDXBUF), A
 
-	LD	D, A
-	LD	E, 0
+	LD	IXH, A
+	LD	IXL, 0
 	EXX
 	XOR	0x10
 	LD	D, A
 	LD	E, 0
+	LD	BC, INDEXBUFFER_SZ - 1		; buffer preload counter
 	EXX
 
-	LD	IX, 65536 - INDEXBUFFER_SZ / 3	; buffer preload counter
 	LD	IYL, 0				; block counter (256 blocks)
 
 	; handle 68k track stop request
@@ -275,15 +274,14 @@ restart:
 stop_loop:
 	JR	stop_loop
 
-chunkIdx_loSmp:
-	POP	BC
-	playLoSample C, 0
-	playLoSample B, 1
-	POP	BC
-	playLoSample C, 2
-	playLoSample B, 3
-	EXX
-	
+chunkIdx_hiSmp:
+	POP	DE
+	playHiSample E, 0
+	playHiSample D, 1
+	POP	DE
+	playHiSample E, 2
+	playHiSample D, 3
+
 	DJNZ	chunkIdx_loop
 
 	; main loop, one 8 chunks block at a time
@@ -296,9 +294,8 @@ main_loop:
 	JP	Z, restart
 
 	; load bit shift for 8 chunk idxs
-	LD	A, (DE)
-	LD	C, A
-	INC	DE
+	LD	C, (IX)
+	INC	IX
 
 	LD	B, 8
 
@@ -306,34 +303,30 @@ chunkIdx_loop:
 
 	; load chunk index
 
-	LD	A, (DE)
-	INC	DE
+	LD	E, (IX)
+	INC	IX
 
 	; compute chunk address
 
-	LD	L, A
-	LD	A, H
+	LD	D, IYH
+	EX	DE, HL		; *
 	ADD	HL, HL
 	ADD	HL, HL
-
 	LD	SP, HL
-
-	LD	H, A
+	EX	DE, HL		; *
 
 	; play the chunk samples
 
 	SLA	C
-	EXX
-	JP	NC, chunkIdx_loSmp
+	JR	C, chunkIdx_hiSmp
 	
-	POP	BC
-	playHiSample C, 0
-	playHiSample B, 1
-	POP	BC
-	playHiSample C, 2
-	playHiSample B, 3
-	EXX
-
+	POP	DE
+	playLoSample E, 0
+	playLoSample D, 1
+	POP	DE
+	playLoSample E, 2
+	playLoSample D, 3
+	
 	DJNZ	chunkIdx_loop
 	JP	main_loop
 

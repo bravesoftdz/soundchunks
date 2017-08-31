@@ -184,7 +184,7 @@ start:
 		VDP_waitVSync();
 		
 		RSC_Set68kBusLockedFlag(TRUE);
-		DMA_doDma(DMA_VRAM, 0, TILE_USER, 4096, 2);
+		DMA_doDma(DMA_VRAM, 0, TILE_USER, 2048, 2);
 		RSC_Set68kBusLockedFlag(FALSE);
 	}
 #endif

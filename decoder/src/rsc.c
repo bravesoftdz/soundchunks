@@ -5,7 +5,7 @@
 
 #define Z80_RSCFLAGS 0x100
 #define Z80_RSCBANK 0x101
-#define Z80_RSCBANKPOS_H 0x103
+#define Z80_68KLOCKED 0x102
 
 void RSC_Init(const u8 * rsc_track)
 {
@@ -44,9 +44,9 @@ s8 RSC_IsTrackFinished(void)
 
 void RSC_Set68kBusLockedFlag(s8 flag)
 {
-	flag = flag ? 0x00 : 0x80;	
+	flag = flag ? 0x80 : 0x00;	
 	Z80_requestBus(TRUE);
-	Z80_write(Z80_RSCBANKPOS_H, (Z80_read(Z80_RSCBANKPOS_H) & 0x7f) | flag);
+	Z80_write(Z80_68KLOCKED, flag);
 	Z80_releaseBus();
 }
 
