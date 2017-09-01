@@ -3,9 +3,9 @@
 #include "rsc.h"
 #include "z80_rsc.h"
 
-#define Z80_RSCFLAGS 0x100
-#define Z80_RSCBANK 0x101
-#define Z80_68KLOCKED 0x102
+#define Z80_RSCFLAGS 0x110
+#define Z80_RSCBANK 0x111
+#define Z80_68KLOCKED 0x112
 
 void RSC_Init(const u8 * rsc_track)
 {

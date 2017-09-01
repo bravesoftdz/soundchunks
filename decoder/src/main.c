@@ -10,7 +10,7 @@
 
 #define ROL8(x, n) ((x>>(8-n)) | (x<<n))
 
-#define USE_RSC_REF_DECODER
+//#define USE_RSC_REF_DECODER
 #define USE_YM_DEBUG_BIT
 
 int main()
@@ -48,11 +48,15 @@ int main()
 		while(!(*ymA0 & 0x40));
 #else		
 		while(!(*ymA0 & 0x01));
-		*ymA0 = 0x27;
-		*ymD0 = 0x15;
 #endif		
 	}
 	
+	inline auto void ymRT(void)
+	{
+		*ymA0 = 0x27;
+		*ymD0 = 0x15;
+	}
+
 	inline auto void ymW1(u8 a, u8 d)
 	{
 		if (a)
@@ -126,12 +130,12 @@ int main()
 #endif		
 
 		u8 *chunks = &rsc[2];
-		u16 blkCnt = 0, curChunkOff = 0;
-		u8 sample, sampleLo, bitShift = 0, bsCtr = 0, phase = 0;
+		u16 blkCnt = 0, curChunkOff = 0, phase = 0;
+		u8 sample, sampleLo, bitShift = 0, bsCtr = 0;
 		vu8 vLo = 0xff;
 		for (;;)
 		{
-			if (phase >= RSC_SAMPLES_PER_CHUNK)
+			if (phase >= RSC_SAMPLES_PER_CHUNK * 0x100)
 			{
 				bitShift <<= 1;
 
@@ -158,7 +162,7 @@ int main()
 					blkCnt--;
 				}
 
-				curChunkOff = (*rsc++) << RSC_SAMPLES_PER_CHUNK_SHIFT;
+				curChunkOff = *rsc++;
 				phase = 0;
 				bsCtr--;
 			}
@@ -174,18 +178,17 @@ int main()
 				sample = (sample >> 1) + 64;
 			}
 			
-#ifdef USE_YM_DEBUG_BIT
 			ymWT();
-#endif
 			ymWSH(sample);
 			ymWSL(sampleLo);
 #ifndef USE_YM_DEBUG_BIT
-			ymWT();
-#endif
-
-			phase++;
+			ymRT();
+#endif			
+			
+			phase += 0x100;
 		}
 #else
+		DMA_setAutoFlush(FALSE);
 		RSC_Init(rsc);
 
 		for(;;)
@@ -198,12 +201,14 @@ int main()
 			if (RSC_IsTrackFinished())
 			{
 				track++;
+				break;
 			}
 
 			VDP_waitVSync();
 
 			RSC_Set68kBusLockedFlag(TRUE);
-			DMA_doDma(DMA_VRAM, 0, TILE_USER, 2048, 2);
+			DMA_flushQueue();
+			DMA_doDma(DMA_VRAM, 0, TILE_USER, 8 * 1024, 2);
 			RSC_Set68kBusLockedFlag(FALSE);
 		}
 #endif
