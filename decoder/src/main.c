@@ -188,29 +188,29 @@ int main()
 			phase += 0x100;
 		}
 #else
-		DMA_setAutoFlush(FALSE);
 		RSC_Init(rsc);
 
 		for(;;)
 		{
 			if (JOY_readJoypad(0) & BUTTON_A)
 			{
+				VDP_drawText("Skipping...", 2, 14);
 				RSC_StopTrack(FALSE);
 			}
 
 			if (RSC_IsTrackFinished())
 			{
+				RSC_Close();
 				track++;
 				break;
 			}
-
+			
 			VDP_waitVSync();
 
 			RSC_Set68kBusLockedFlag(TRUE);
-			DMA_flushQueue();
 			DMA_doDma(DMA_VRAM, 0, TILE_USER, 8 * 1024, 2);
 			RSC_Set68kBusLockedFlag(FALSE);
-		}
+		};
 #endif
 	}
 

@@ -5,7 +5,7 @@
 
 	INCLUDE "z80_def.i80"	; basic definitions
 
-	//define	USE_YM_DEBUG_BIT
+	;define	USE_YM_DEBUG_BIT
 
 ; ###########################	    var	       ##############################
 
@@ -133,7 +133,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	LD	A, (DE)
 
 	INC	D
-
+	
 	ymWS
 
 	endm
@@ -156,13 +156,39 @@ INDEXBUFFER_SZ	EQU	256 * 9
 
 	endm
 
+	; play the chunk samples
+	macro	playChunkSamples chkIdx
+
+	RL	C
+	JR	C, .hiSmp
+	
+	playLoSample 0
+	playLoSample 1
+	playLoSample 2
+	playLoSample 3
+
+	if chkIdx = 0
+		JP chunkIdx_loop
+	else
+		DJNZ	chunkIdx_start
+		JP	main_loop
+	endif
+
+.hiSmp:
+	playHiSample 0
+	playHiSample 1
+	playHiSample 2
+	playHiSample 3
+
+.end
+	endm
+
 ; ###########################	    init       ##############################
 
 	ORG	0x0000
 
 init:
 	DI			; disable ints
-	LD	SP, CHUNKBUFFER1 - 2
 	JP	start		; jump to start
 
 
@@ -223,8 +249,6 @@ start:
 	EXX
 
 	LD	IX, YMPORT0
-	PUSH	IX
-	LD	IYH, high CHUNKBUFFER0
 	LD	A, high INDEXBUFFER1
 	LD	(RSCCURIDXBUF), A
 
@@ -242,6 +266,7 @@ restart:
 
 	LD	H, A
 	LD	L, 0
+	LD	SP, HL
 	EXX
 	XOR	0x10
 	LD	D, A
@@ -250,6 +275,7 @@ restart:
 	EXX
 
 	LD	IYL, 0				; block counter (256 blocks)
+	LD	H, high CHUNKBUFFER0
 
 	; handle 68k track stop request
 
@@ -266,54 +292,45 @@ restart:
 
 	HALT
 
-restart_trampoline:
-	JP	restart
-
-chunkIdx_hiSmp:
-	playHiSample 0
-	playHiSample 1
-	playHiSample 2
-	playHiSample 3
-
-	DJNZ	chunkIdx_loop
-
-	; main loop, one 8 chunks block at a time
-
 main_loop:
 	
 	; check for end of frame
 
 	DEC	IYL
-	JR	Z, restart_trampoline
+	JR	Z, restart
 
 	; load bit shift for 8 chunk idxs
-	LD	C, (HL)
-	INC	HL
+	POP	BC
+	DEC	SP
 
-	LD	B, 8
+	LD	B, 4
+	JP	chunkIdx_start
 
 chunkIdx_loop:
 
+	; compute chunk address
+
+	LD	D, H
+	LD	E, L
+
+	playChunkSamples 1
+
+	DEC	B
+	JP	Z, main_loop
+
+chunkIdx_start:
+
 	; load chunk index
 
-	LD	E, (HL)
-	INC	HL
+	POP	DE
+	LD	L, D
 
 	; compute chunk address
 
-	LD	D, IYH
+	LD	D, H
 
-	; play the chunk samples
+	playChunkSamples 0
 
-	RL	C
-	JR	C, chunkIdx_hiSmp
-	
-	playLoSample 0
-	playLoSample 1
-	playLoSample 2
-	playLoSample 3
-	
-	DJNZ	chunkIdx_loop
-	JP	main_loop
+	JP	chunkIdx_loop
 
 	END
