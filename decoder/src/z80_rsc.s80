@@ -14,9 +14,8 @@ RSCPARAMS	EQU	0x110
 RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
 RSCBANK		EQU	RSCPARAMS+0x01
 RSC68KLOCKED	EQU	RSCPARAMS+0x02  // 7: "68k bus locked" flag, managed by the 68k
-RSCCURIDXBUF	EQU	RSCPARAMS+0x03
+RSCCURCHUNKBUF	EQU	RSCPARAMS+0x03
 RSCFRAMELEFT	EQU	RSCPARAMS+0x04
-RSCTMP16BIT	EQU	RSCPARAMS+0x06
 
 SAMPLES_PER_CHUNK_SHIFT		EQU	2
 SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
@@ -216,7 +215,7 @@ start:
 		; using SYNC debug bit (set one cycle every 52780Hz)
 		ymW0	0x21, 0x41
 	else
-		; Timer A enabled @ 26390Hz / 4
+		; Timer A enabled @ 26390Hz / 2
 		ymW0	0x24, 0xff
 		ymW0	0x25, 0x00
 		ymW0	0x27, 0x15
@@ -228,9 +227,8 @@ start:
 	ymW0	0x2a, 0x80
 
 	; preload buffers
-	
+
 	LD	HL, 0x8000
-	
 	LD	E, (HL)
 	INC	L
 	LD	D, (HL)
@@ -238,44 +236,116 @@ start:
 	LD	(RSCFRAMELEFT), DE
 
 	LD	DE, CHUNKBUFFER0
-	LD	BC, CHUNKBUFFER_SZ + INDEXBUFFER_SZ
+	LD	BC, CHUNKBUFFER_SZ; + INDEXBUFFER_SZ
 	LDIR
 
 	; init player
 
-	LD	(RSCTMP16BIT), HL
-	EXX
-	LD	HL, (RSCTMP16BIT)
 	EXX
 
 	LD	IX, YMPORT0
-	LD	A, high INDEXBUFFER1
-	LD	(RSCCURIDXBUF), A
+	LD	IYH, high INDEXBUFFER0
+	LD	A, high CHUNKBUFFER0
+	LD	(RSCCURCHUNKBUF), A
 
 	; Z80 side init done
 	LD	A, (RSCFLAGS)
 	OR	2
 	LD	(RSCFLAGS), A
 
+	JR	restart
+
+noBufLeft:
+
+	; load next frame size
+	LD	A, (DE)
+	LD	L, A
+	INC	DE
+	LD	A, (DE)
+	LD	H, A
+	INC	DE
+
+	ld	A, 11
+	ld	(RSCFLAGS), A
+	
+	LD	A, (RSCCURCHUNKBUF)
+	XOR	0x10
+	LD	IYH, A
+
+	LD	(RSCCURCHUNKBUF), A
+
+	LD	BC, CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK - 1
+
+	JP	bufEnd
+
 restart:	
+
+	; frame streaming / frame change
+
+	EXX
+	EX	DE, HL
+	
+	LD	HL, (RSCFRAMELEFT)
+
+	LD	A, H
+	OR	L
+	JR	Z, noBufLeft
+
+	LD	BC, INDEXBUFFER_SZ / 9
+
+	OR	A
+	SBC	HL, BC
+	JP	NC, fullBufLeft
+
+	ADD	HL, BC
+	LD	B, H
+	LD	C, L
+
+	; for proper preloadBuffer operation (size * 9) - 1
+	ADD	HL, HL
+	ADD	HL, HL
+	ADD	HL, HL
+	ADD	HL, BC
+	LD	B, H
+	LD	C, L
+	DEC	BC
+
+	LD	HL, 0
+
+fullBufLeft:
+
+	LD	BC, INDEXBUFFER_SZ - 1
+
+bufEnd:
+
+	LD	(RSCFRAMELEFT), HL
+
+	EX	DE, HL
+	EXX
+
 	; double buffer handling / switch
 
-	LD	A, (RSCCURIDXBUF)
+	LD	A, IYH
+
+	EXX
+	LD	D, A
+	LD	E, 0
+	EXX
+
 	XOR	0x10
-	LD	(RSCCURIDXBUF), A
+	OR	high INDEXBUFFER0
+	AND	~ (high CHUNKBUFFER0)
 
 	LD	H, A
 	LD	L, 0
 	LD	SP, HL
-	EXX
-	XOR	0x10
-	LD	D, A
-	LD	E, 0
-	LD	BC, INDEXBUFFER_SZ - 1		; buffer preload counter
-	EXX
+
+	LD	IYH, A
 
 	LD	IYL, 0				; block counter (256 blocks)
-	LD	H, high CHUNKBUFFER0
+
+	LD	A, (RSCCURCHUNKBUF)
+	LD	H, A
 
 	; handle 68k track stop request
 
@@ -292,12 +362,16 @@ restart:
 
 	HALT
 
+; ###########################	  main loop    ##############################
+
+	BLOCK	INDEXBUFFER0 + INDEXBUFFER_SZ + 0x10 - $
+
 main_loop:
 	
 	; check for end of frame
 
 	DEC	IYL
-	JR	Z, restart
+	JP	Z, restart
 
 	; load bit shift for 8 chunk idxs
 	POP	BC
@@ -308,8 +382,7 @@ main_loop:
 
 chunkIdx_loop:
 
-	; compute chunk address
-
+	; chunk address in DE
 	LD	D, H
 	LD	E, L
 
@@ -320,13 +393,11 @@ chunkIdx_loop:
 
 chunkIdx_start:
 
-	; load chunk index
-
+	; load 2 chunk indexes
 	POP	DE
 	LD	L, D
 
-	; compute chunk address
-
+	; chunk address in DE
 	LD	D, H
 
 	playChunkSamples 0
