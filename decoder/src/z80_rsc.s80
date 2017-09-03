@@ -43,7 +43,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	DEC	L
 
 .wait:	BIT	7, (HL)
-	JP	NZ, .wait
+	JR	NZ, .wait
 
 	endm
 	
@@ -58,7 +58,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	DEC	L
 
 .wait:	BIT	7, (HL)
-	JP	NZ, .wait
+	JR	NZ, .wait
 
 	endm
 	
@@ -74,7 +74,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 
 .wait:	
 	BIT	0, (IX + 0)
-	JP	Z, .wait
+	JR	Z, .wait
 	
 	LD	(IX + 0), 0x27
 	LD	(IX + 1), 0x15
@@ -93,9 +93,10 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	AND	H
 	JP	M, .do_buffer
 
-	; burn cycles to match the LDIs
-	JR	$ + 2
-	JR	$ + 2
+	; handle potential bank change
+	BIT	7, H
+	CALL	Z, bankChange
+	OR	A			; roughly match do_buffer timing (also reset carry)
 	JR	.done
 
 .do_buffer
@@ -127,6 +128,8 @@ INDEXBUFFER_SZ	EQU	256 * 9
 	LD	A, (DE)
 
 	INC	D
+	NOP				; match playLoSample timing
+	NOP
 	
 	ymWS
 
@@ -143,8 +146,8 @@ INDEXBUFFER_SZ	EQU	256 * 9
 
 	LD	A, (DE)
 
-	SRL	A
-	ADD	64
+	RRA				; Carry should always be 0 at this point
+	ADD	IXH			; IXH = 64 here
 
 	ymWS
 
@@ -229,6 +232,9 @@ start:
 	LD	BC, CHUNKBUFFER_SZ + INDEXBUFFER_SZ
 	LDIR
 
+	INC	HL			; compensate (*)
+	INC	HL
+
 	; init player
 
 	DEC	BC
@@ -240,7 +246,7 @@ start:
 	LD	(RSCNEXTCHUNKBUF), A
 
 	EX	AF
-	OR	A
+	SCF
 	EX	AF
 	
 	; Z80 side init done
@@ -252,16 +258,17 @@ start:
 
 noBufLeft:
 	EX	AF
-	JP	C, nblSecondBlockPart	; F' Carry holds block part information
+	JP	NC, nblSecondBlockPart	; F' Carry holds block part information
 
-	LD	A, (DE)			; load next frame block count into A'
-	INC	DE
-	SCF
+	LD	A, C			; load next frame block count into A'
+	
+	OR	A			; zero blocks = termination (also clears F' Carry)
+	JP	Z, playerStop
 	EX	AF
 
-	INC	(HL)			;  Inc(RSCBLOCKSLEFT) (ensure we return to noBufLeft for the second part)
-
 	; first part we load the chunks
+
+	INC	(HL)			;  Inc(RSCBLOCKSLEFT) (ensure we return to noBufLeft for the second part)
 
 	LD	A, IYH
 	XOR	0x10			; double optimised buffer switch here
@@ -279,13 +286,15 @@ noBufLeft:
 
 	LD	BC, CHUNKBUFFER_SZ - 1
 
+	DEC	DE			; compensate (*)
+
 	LD	IYL, NOBUFLEFT_FIRST_PART_BLKCNT	; about 1 / 3 of a block
 
 	JP	bufEnd
 
 nblSecondBlockPart:
 	LD	(HL), A			; HL = RSCBLOCKSLEFT
-	OR	A			; clear carry
+	SCF
 	EX	AF
 
 	; second part we load the first block
@@ -295,7 +304,7 @@ nblSecondBlockPart:
 	LD	H, A
 	LD	L, 0
 
-	LD	BC, INDEXBUFFER_SZ - 1
+	LD	BC, INDEXBUFFER_SZ - 1 + 2		; more bytes than needed to load possible next frame blkCnt (*)
 
 	LD	IYL, 256 - NOBUFLEFT_FIRST_PART_BLKCNT	; rest of the block
 
@@ -305,7 +314,15 @@ restart:
 	; frame streaming / frame change
 
 	EXX
+	
+	INC	BC
+	ADD	HL, BC			; skip what wasn't buffered by preloadBuffer
+
 	EX	DE, HL
+
+	DEC	L
+	DEC	L
+	LD	C, (HL)			;  load possible blkCnt in C (*)
 
 	LD	HL, RSCBLOCKSLEFT
 	
@@ -314,7 +331,10 @@ restart:
 
 	; prepare next block
 
-	LD	BC, INDEXBUFFER_SZ - 1
+	LD	BC, INDEXBUFFER_SZ - 1 + 2		; more bytes than needed to load possible next frame blkCnt (*)
+
+	DEC	DE			; compensate (*)
+	DEC	DE
 
 	; double buffer handling / switch
 
@@ -345,6 +365,7 @@ bufEnd:
 	AND	8
 	JP	Z, main_loop_noEof
 
+playerStop:
 	LD	A, (RSCFLAGS)
 	OR	4
 	LD	(RSCFLAGS), A
@@ -353,6 +374,41 @@ bufEnd:
 	ymW0	0x2c, 0x08
 
 	HALT
+
+bankChange:
+	LD	A, (RSCBANK)
+	INC	A
+	LD	(RSCBANK), A
+
+	LD  H, high BANKREG     ; HL = BANKREG              ' 10
+	LD  (HL), A             ; #1 (bit 15)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #2 (bit 16)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #3 (bit 17)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #4 (bit 18)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #5 (bit 19)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #6 (bit 20)               ' 7
+	RRA                     ;                           ' 4
+	LD  (HL), A             ; #7 (bit 21)               ' 7
+	LD  (HL), H             ; #8 (bit 22 = 0)           ' 7
+	LD  (HL), H             ; #9 (bit 23 = 0)           ' 7
+
+	LD	H, 0x80
+
+	BIT	0, L
+	RET	Z
+	
+	; "repair" wrong byte if we went past bank end
+	DEC	DE
+	DEC	L
+	INC	BC
+	LDI
+
+	RET
 
 ; ###########################	  main loop    ##############################
 

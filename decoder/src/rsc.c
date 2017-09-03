@@ -8,6 +8,7 @@
 #define Z80_68KLOCKED 0x112
 
 static _voidCallback * vIntSysHandler;
+static u16 lockCounter = 0;
 
 static void RSC_vInt(void)
 {
@@ -52,7 +53,7 @@ void RSC_Close(void)
 	Z80_loadDriver(Z80_DRIVER_NULL, TRUE);
 }
 
-s8 RSC_IsTrackFinished(void)
+u8 RSC_IsTrackFinished(void)
 {
 	SYS_disableInts();
 	Z80_requestBus(TRUE);
@@ -63,17 +64,34 @@ s8 RSC_IsTrackFinished(void)
 	return !!(sts & 4);
 }
 
-void RSC_Set68kBusLockedFlag(s8 flag)
+static void internalSet68kBusLockedFlag(u8 flag)
 {
-	SYS_disableInts();
-	flag = flag ? 0x80 : 0x00;	
 	Z80_requestBus(TRUE);
 	Z80_write(Z80_68KLOCKED, flag);
 	Z80_releaseBus();
+}
+
+void RSC_Set68kBusLockedFlag(u8 flag)
+{
+	SYS_disableInts();
+	if (flag)
+	{
+		if (!lockCounter)
+			internalSet68kBusLockedFlag(0x80);
+		lockCounter++;
+	}
+	else
+	{
+		if (!lockCounter)
+			SYS_die("RSC_Set68kBusLockedFlag lock counter mismatch!");
+		lockCounter--;
+		if (!lockCounter)
+			internalSet68kBusLockedFlag(0x00);
+	}
 	SYS_enableInts();
 }
 
-void RSC_StopTrack(s8 waitFinished)
+void RSC_StopTrack(u8 waitFinished)
 {
 	// send stop request to Z80
 	SYS_disableInts();
