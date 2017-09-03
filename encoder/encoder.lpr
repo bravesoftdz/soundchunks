@@ -8,6 +8,7 @@ const
   BandCount = 1;
   MDSampleRate = 26390;
   MDCutoff = 3390;
+  MDBlockBufferLen = 256;
 
 type
   TEncoder = class;
@@ -229,7 +230,7 @@ begin
   ChunkCount := (endSample - startSample + 1 - 1) div encoder.ChunkSize + 1;
   SampleCount := endSample - startSample + 1;
 
-  Assert(ChunkCount < 65536 * trunc(8 / log2(encoder.OutputBitDepth - 7)), 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
+  Assert(ChunkCount < 256 * MDBlockBufferLen * trunc(8 / log2(encoder.OutputBitDepth - 7)), 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
 
   if encoder.Verbose then
   begin
@@ -634,7 +635,7 @@ begin
     for j := 0 to BandCount - 1 do
     begin
       Assert(frames[i].bands[j].chunks.Count mod (BlockSampleCount div ChunkSize) = 0);
-      AStream.WriteWord(frames[i].bands[j].chunks.Count div (BlockSampleCount div ChunkSize));
+      AStream.WriteByte(frames[i].bands[j].chunks.Count div (BlockSampleCount div ChunkSize));
 
       cl := frames[i].bands[j].reducedChunks;
       if cl.Count = 0 then
@@ -674,7 +675,7 @@ begin
     end;
   end;
 
-  AStream.WriteWord(0); // Termination
+  AStream.WriteByte(0); // Termination
 end;
 
 procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
@@ -793,7 +794,7 @@ begin
   for i := 0 to BandCount - 1 do
     if bandData[i].underSample * ChunkSize > BlockSampleCount then
       BlockSampleCount := bandData[i].underSample * ChunkSize;
-  BlockSampleCount := Max(trunc(8 / log2(OutputBitDepth - 7)) * ChunkSize, BlockSampleCount);
+  BlockSampleCount := Max(MDBlockBufferLen * trunc(8 / log2(OutputBitDepth - 7)) * ChunkSize, BlockSampleCount);
 
   // ensure srcData ends on a full block
   psc := SampleCount;
@@ -808,7 +809,7 @@ begin
   frameCost := 0;
   for i := 0 to BandCount - 1 do
   begin
-    fixedCost += (SampleCount * (round(log2(ChunksPerBand)) + round(log2(OutputBitDepth - 7)))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Word);
+    fixedCost += (SampleCount * (round(log2(ChunksPerBand)) + round(log2(OutputBitDepth - 7)))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Byte);
     frameCost += ChunksPerBand * ChunkSize;
   end;
 

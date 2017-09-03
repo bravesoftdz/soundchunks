@@ -11,7 +11,7 @@
 #define ROL8(x, n) ((x>>(8-n)) | (x<<n))
 
 //#define USE_RSC_REF_DECODER
-#define USE_YM_DEBUG_BIT
+//#define USE_YM_DEBUG_BIT
 
 int main()
 {
@@ -129,8 +129,8 @@ int main()
 		ymW0(0x27, 0x15);
 #endif		
 
-		u8 *chunks = &rsc[2];
-		u16 blkCnt = 0, curChunkOff = 0, phase = 0;
+		u8 *chunks = &rsc[1];
+		u16 blkCnt = 0, curChunkOff = 0, phase = RSC_SAMPLES_PER_CHUNK * 0x100;
 		u8 sample, sampleLo, bitShift = 0, bsCtr = 0;
 		vu8 vLo = 0xff;
 		for (;;)
@@ -143,8 +143,7 @@ int main()
 				{
 					if (!blkCnt)
 					{
-						blkCnt = *rsc++;
-						blkCnt |= (*rsc++) << 8;
+						blkCnt = (*rsc++) << 8;
 
 						JOY_update();
 						if (!blkCnt || (JOY_readJoypad(0) & BUTTON_A))
@@ -190,6 +189,7 @@ int main()
 #else
 		RSC_Init(rsc);
 
+		u16 dma = 0;
 		for(;;)
 		{
 			if (JOY_readJoypad(0) & BUTTON_A)
@@ -208,7 +208,7 @@ int main()
 			VDP_waitVSync();
 
 			RSC_Set68kBusLockedFlag(TRUE);
-			DMA_doDma(DMA_VRAM, 0, TILE_USER, 8 * 1024, 2);
+			DMA_doDma(DMA_VRAM, 0, TILE_USER, (((dma++) & 0x7) + 1)  * 1024, 2);
 			RSC_Set68kBusLockedFlag(FALSE);
 		};
 #endif
