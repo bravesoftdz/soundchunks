@@ -3,34 +3,38 @@
 
 ; ###########################	   define      ##############################
 
-	INCLUDE "z80_def.i80"	; basic definitions
+	include "z80_def.i80"	; basic definitions
+
+	;define USE_SAFE_BUFFER_UNDERRUNS
+	define USE_STORE_LAST_SAMPLE
 
 ; ###########################	    var	       ##############################
 
-RSCPARAMS	EQU	0x110
+RSCPARAMS	equ	0x110
 
-RSCFLAGS	EQU	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
-RSCBANK		EQU	RSCPARAMS+0x01
-RSC68KLOCKED	EQU	RSCPARAMS+0x02  // 7: "68k bus locked" flag, managed by the 68k
-RSCBLOCKSLEFT	EQU	RSCPARAMS+0x03
-RSCNEXTCHUNKBUF	EQU	RSCPARAMS+0x04
+RSCFLAGS	equ	RSCPARAMS+0x00	// 0: 68k ready; 1: Z80 ready; 2: track finished; 3: stop requested
+RSCBANK		equ	RSCPARAMS+0x01
+RSC68KLOCKED	equ	RSCPARAMS+0x02  // 7: "68k bus locked" flag, managed by the 68k
+RSCLASTSAMPLE	equ	RSCPARAMS+0x03
+RSCBLOCKSLEFT	equ	RSCPARAMS+0x04
+RSCNEXTCHUNKBUF	equ	RSCPARAMS+0x05
 
-SAMPLES_PER_CHUNK_SHIFT		EQU	2
-SAMPLES_PER_CHUNK		EQU	(1 << SAMPLES_PER_CHUNK_SHIFT)
-CHUNKS_PER_FRAME		EQU	256
-NOBUFLEFT_FIRST_PART_BLKCNT	EQU	96
+SAMPLES_PER_CHUNK_SHIFT		equ	2
+SAMPLES_PER_CHUNK		equ	(1 << SAMPLES_PER_CHUNK_SHIFT)
+CHUNKS_PER_FRAME		equ	256
+NOBUFLEFT_FIRST_PART_BLKCNT	equ	96
 
-CHUNKBUFFER0	EQU	0x0400
-INDEXBUFFER0	EQU	0x0800
-CHUNKBUFFER1	EQU	0x1400
-INDEXBUFFER1	EQU	0x1800
+CHUNKBUFFER0	equ	0x0400
+INDEXBUFFER0	equ	0x0800
+CHUNKBUFFER1	equ	0x1400
+INDEXBUFFER1	equ	0x1800
 
-CHUNKBUFFER_SZ	EQU	(CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK)
-INDEXBUFFER_SZ	EQU	256 * 9
+CHUNKBUFFER_SZ	equ	(CHUNKS_PER_FRAME * SAMPLES_PER_CHUNK)
+INDEXBUFFER_SZ	equ	256 * 9
 
 ; ###########################	   macro       ##############################
 
-	INCLUDE "z80_mac.i80"  ; basic macros
+	include "z80_mac.i80"  ; basic macros
 
 	; data -> YM2612 low reg address
 	macro	ymW0 addr, data
@@ -182,7 +186,7 @@ INDEXBUFFER_SZ	EQU	256 * 9
 
 ; ###########################	    init       ##############################
 
-	ORG	0x0000
+	org	0x0000
 
 init:
 	DI			; disable ints
@@ -315,8 +319,10 @@ restart:
 
 	EXX
 	
-	INC	BC
-	ADD	HL, BC			; skip what wasn't buffered by preloadBuffer
+	ifdef USE_SAFE_BUFFER_UNDERRUNS
+		INC	BC
+		ADD	HL, BC			; skip what wasn't buffered by preloadBuffer
+	endif
 
 	EX	DE, HL
 
@@ -412,17 +418,20 @@ bankChange:
 
 ; ###########################	  main loop    ##############################
 
-	BLOCK	INDEXBUFFER0 + INDEXBUFFER_SZ + 0x10 - $
-
-restart_trampoline:
-	JP restart
+	block	INDEXBUFFER0 + INDEXBUFFER_SZ + 0x10 - $
 
 main_loop:
 	
+	; can be used for a VU meter
+
+	ifdef USE_STORE_LAST_SAMPLE
+		LD	(RSCLASTSAMPLE), A
+	endif
+
 	; check for end of frame
 
 	DEC	IYL
-	JR	Z, restart_trampoline
+	JP	Z, restart
 
 main_loop_noEof:
 

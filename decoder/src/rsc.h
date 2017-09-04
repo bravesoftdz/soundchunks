@@ -8,3 +8,4 @@ void RSC_Close(void);
 void RSC_Set68kBusLockedFlag(u8 flag);
 u8 RSC_IsTrackFinished(void);
 void RSC_StopTrack(u8 waitFinished);
+s8 RSC_GetLastSample(void);

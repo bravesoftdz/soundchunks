@@ -67,18 +67,18 @@ int main()
 		while(*ymA0 & 0x80);
 	}
 	
-	u8 track = 2;
+	u8 track = 0;
 	
 	for (;;)
 	{
 		VDP_clearPlan(PLAN_A, TRUE);
-		VDP_drawText("RSE SoundChunks decoder", 8, 4);
+		VDP_drawText("RSE SoundChunks decoder", 8, 3);
 #ifdef USE_RSC_REF_DECODER
-		VDP_drawText("(68k ref mode)", 12, 5);
+		VDP_drawText("(68k ref mode)", 12, 4);
 #else
-		VDP_drawText("(Z80 mode)", 14, 5);
+		VDP_drawText("(Z80 mode)", 14, 4);
 #endif	
-		VDP_drawText("(Press A for next track)", 2, 12);
+		VDP_drawText("(Press A for next track)", 2, 22);
 
 		u8 * rsc = NULL;
 
@@ -92,16 +92,18 @@ int main()
 		switch(track)
 		{
 		case 0:
-			VDP_drawText("Kavinsky - Outrun Prelude", 2, 10);
-			rsc = (u8 *) rsc_kav;	
+//			VDP_drawText("Kavinsky - Outrun Prelude", 2, 20);
+			VDP_drawText("Queen - We Will Rock You", 2, 20);
+			rsc = (u8 *) rsc_1;	
 			break;
 		case 1:
-			VDP_drawText("David Whittaker - Shadow of the Beast", 2, 10);
-			rsc = (u8 *) rsc_sob;
+			VDP_drawText("David Whittaker - Shadow of the Beast", 2, 20);
+			rsc = (u8 *) rsc_2;
 			break;
 		case 2:
-			VDP_drawText("Wintergatan - Live Intro", 2, 10);
-			rsc = (u8 *) rsc_win;
+//			VDP_drawText("Wintergatan - Live Intro", 2, 20);
+			VDP_drawText("Robots with Rayguns - Body Motion", 2, 20);
+			rsc = (u8 *) rsc_3;
 			break;
 		}
 
@@ -187,14 +189,37 @@ int main()
 			phase += 0x100;
 		}
 #else
+		u16 tileScr = 0;
+		s16 vscrolla[32];
+		s16 vscrollb[32];
+		
+		auto void hInt(void)
+		{
+			static s16 avg = 0;
+			avg = ((avg << 1) + RSC_GetLastSample()) >> 2;
+			vscrollb[tileScr++] = avg;
+		}
+		
 		RSC_Init(rsc);
 
-		u16 dma = 0;
+		memsetU16((u16 *)vscrolla, 0, 32);
+		memsetU16((u16 *)vscrollb, 0, 32);
+		
+		VDP_setScrollingMode(HSCROLL_PLANE, VSCROLL_2TILE);
+		for (int y = 0; y < screenHeight / 8; ++y)
+			for (int x = 0; x < screenWidth / 8; ++x)
+				VDP_setTileMapXY(PLAN_B, TILE_ATTR_FULL(PAL3, FALSE, FALSE, FALSE, (y == 12) ? 15 : 5 - abs(12 - y)), x, y);
+		
+		internalHIntCB = hInt;
+		VDP_setHIntCounter(10);
+		VDP_setHInterrupt(TRUE);
+
+		u8 pos = 0;
 		for(;;)
 		{
 			if (JOY_readJoypad(0) & BUTTON_A)
 			{
-				VDP_drawText("Skipping...", 2, 14);
+				VDP_drawText("Skipping...", 2, 12);
 				RSC_StopTrack(FALSE);
 			}
 
@@ -207,9 +232,19 @@ int main()
 			
 			VDP_waitVSync();
 
+			tileScr = 0;
+			
+			VDP_setEnable(FALSE);
 			RSC_Set68kBusLockedFlag(TRUE);
-			DMA_doDma(DMA_VRAM, 0, TILE_USER, (((dma++) & 0x7) + 1)  * 1024, 2);
+
+			DMA_doDma(DMA_VRAM, 0, TILE_USER, (((pos++) & 0x3) + 1)  * 1024, 2);
+
+			VDP_setVerticalScrollTile(PLAN_A, 0, vscrolla, 20, TRUE);
+			VDP_setVerticalScrollTile(PLAN_B, 0, vscrollb, 20, TRUE);
+
 			RSC_Set68kBusLockedFlag(FALSE);
+			VDP_setEnable(TRUE);
+			
 		};
 #endif
 	}
