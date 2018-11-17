@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, anysort;
 
 const
-  BandCount = 1;
+  BandCount = 5;
   MDSampleRate = 26390;
   MDCutoff = 3390;
   MDBlockBufferLen = 256;
@@ -138,7 +138,6 @@ type
     ChunkSize: Integer;
     ChunksPerBand: Integer;
     AlternateReduce: Boolean;
-    BandBoundsOffset: Integer;
     BandDenoiseStages: Integer;
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
@@ -696,7 +695,7 @@ end;
 procedure TEncoder.MakeBandGlobalData;
 var
   i: Integer;
-  hc, ratioP, ratioL: Double;
+  ratio, hc: Double;
   bnd: TBandGlobalData;
 begin
   for i := 0 to BandCount - 1 do
@@ -706,18 +705,17 @@ begin
     // determing low and high bandpass frequencies
 
     hc := min(HighCut, SampleRate / 2);
-    ratioP := round((BandBoundsOffset - log2(hc)) / BandCount);
-    ratioL := 0.5;//hc / SampleRate;
+    ratio := (log2(hc) - log2(LowCut)) / BandCount;
 
     if i = 0 then
       bnd.fcl := LowCut / SampleRate
     else
-      bnd.fcl := power(2.0, (BandCount - i) * ratioP) * ratioL;
+      bnd.fcl := 0.5 * power(2.0, -round((BandCount - i) * ratio));
 
     if i = BandCount - 1 then
       bnd.fch := hc / SampleRate
     else
-      bnd.fch := power(2.0, (BandCount - 1 - i) * ratioP) * ratioL;
+      bnd.fch := 0.5 * power(2.0, -round((BandCount - 1 - i) * ratio));
 
     // undersample if the band high freq is a lot lower than nyquist
 
@@ -932,7 +930,7 @@ begin
 
   BitRate := 128;
   Precision := 7;
-  LowCut := 20.0;
+  LowCut := 32.703125; // C1
   HighCut := 18000.0;
   OutputBitDepth := 9;
   ChunkSize := 4;
@@ -942,7 +940,6 @@ begin
 
   StoredBitDepth := 8;
   ChunksPerBand := 256;
-  BandBoundsOffset := 8;
   BandDenoiseStages := 2;
   BandTransFactor := 0.1;
 
@@ -1284,8 +1281,8 @@ begin
       if BandCount > 1 then
         for i := 0 to BandCount - 1 do
           enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
-      if enc.Precision > 0 then
-        enc.SaveRSC;
+      //if enc.Precision > 0 then
+      //  enc.SaveRSC;
 
       enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
 
