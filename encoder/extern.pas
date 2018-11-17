@@ -133,12 +133,11 @@ end;
 procedure DoExternalSKLearn(XY: TDoubleDynArray2; DesiredNbTiles, Precision: Integer; PrintProgress: Boolean;
   var XYC: TIntegerDynArray);
 var
-  i, j, Clu, Inp, st: Integer;
+  i, j, st: Integer;
   InFN, Line, Output, ErrOut: String;
   SL, Shuffler: TStringList;
   Process: TProcess;
   OutputStream: TMemoryStream;
-  Ratio: Double;
   pythonExe: array[0..MAX_PATH-1] of Char;
 begin
   SL := TStringList.Create;

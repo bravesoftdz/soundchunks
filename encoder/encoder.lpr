@@ -25,23 +25,6 @@ type
 
   PBandGlobalData = ^TBandGlobalData;
 
-  { TCICFilter }
-
-  TCICFilter = class
-  private
-    R, pos: Integer;
-    integrator: TDoubleDynArray;
-    comb: TDoubleDynArray2;
-  public
-    Ratio: Integer;
-    Stages: Integer;
-    HighPass: Boolean;
-
-    constructor Create(AFc: Double; AStages: Integer; AHighPass: Boolean);
-
-    function ProcessSample(Smp: Double): Double;
-  end;
-
   { TChunk }
 
   TChunkList = specialize TFPGObjectList<TChunk>;
@@ -138,7 +121,6 @@ type
     ChunkSize: Integer;
     ChunksPerBand: Integer;
     AlternateReduce: Boolean;
-    BandDenoiseStages: Integer;
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
 
@@ -265,47 +247,6 @@ begin
   end;
 
   Write('.');
-end;
-
-constructor TCICFilter.Create(AFc: Double; AStages: Integer; AHighPass: Boolean);
-begin
-  HighPass := AHighPass;
-  Stages := AStages;
-  Ratio := round(0.5 / AFc);
-  R := max(1, Ratio);
-  SetLength(comb, Stages, R);
-  SetLength(integrator, Stages);
-  pos := 0;
-end;
-
-function TCICFilter.ProcessSample(Smp: Double): Double;
-var
-  i: Integer;
-  lsmp: Double;
-begin
-  Result := 0;
-
-  lsmp := comb[0, pos];
-
-  for i := 0 to Stages - 1 do
-  begin
-    Result := Smp - comb[i, pos];
-    comb[i, pos] := Smp;
-    Smp := Result;
-  end;
-
-  pos := (pos + 1) mod R;
-
-  for i := 0 to Stages - 1 do
-  begin
-    integrator[i] := integrator[i] + Result;
-    Result := integrator[i];
-  end;
-
-  Result /= intpower(R, Stages);
-
-  if HighPass then
-    Result := lsmp - Result;
 end;
 
 constructor TBand.Create(frm: TFrame; idx: Integer; startSample, endSample: Integer);
@@ -729,8 +670,6 @@ procedure TEncoder.MakeBandSrcData(AIndex: Integer);
 var
   j: Integer;
   bnd: TBandGlobalData;
-  cic: TCICFilter;
-  cicSmp: Double;
   tbData, tbCoeffs: TDoubleDynArray;
   tb: Double;
 begin
@@ -743,22 +682,6 @@ begin
   // band pass the samples
   bnd.filteredData := DoBPFilter(bnd.fcl, bnd.fch, BandTransFactor, bnd.filteredData);
   SetLength(bnd.filteredData, SampleCount);
-
-  if AIndex < BandCount - 1 then
-  begin
-    // compensate for decoder altering the pass band (low pass)
-    cic := TCICFilter.Create(bnd.fch, BandDenoiseStages, True);
-    try
-      for j := -cic.Ratio + 1 to High(bnd.filteredData) do
-      begin
-        cicSmp := cic.ProcessSample(bnd.filteredData[Min(High(bnd.filteredData), j + cic.Ratio - 1)]);
-        if j >= 0 then
-          bnd.filteredData[j] += 2.4 * cicSmp;
-      end;
-    finally
-      cic.Free;
-    end;
-  end;
 
   if TrebleBoost then
   begin
@@ -912,13 +835,13 @@ begin
 
   if fcl > 0.0 then
   begin
-    coeffs := DoFilterCoeffs(fcl, transFactor * (exp(fcl) - 1.0), True, True);
+    coeffs := DoFilterCoeffs(fcl, transFactor, True, True);
     Result := DoFilter(Result, coeffs);
   end;
 
   if fch < 0.5 then
   begin
-    coeffs := DoFilterCoeffs(fch, transFactor * (exp(fch) - 1.0), False, True);
+    coeffs := DoFilterCoeffs(fch, transFactor, False, True);
     Result := DoFilter(Result, coeffs);
   end;
 end;
@@ -940,8 +863,7 @@ begin
 
   StoredBitDepth := 8;
   ChunksPerBand := 256;
-  BandDenoiseStages := 2;
-  BandTransFactor := 0.1;
+  BandTransFactor := 1;
 
   frames := TFrameList.Create;
 end;
@@ -955,11 +877,11 @@ end;
 
 procedure TEncoder.MakeDstData;
 var
-  i, j, k, pos, poso: Integer;
+  i, j, k, pos: Integer;
   smp: Double;
-  offset: array[0 .. BandCount - 1] of Integer;
   bnd: TBandGlobalData;
-  lp: array[0 .. BandCount - 1] of TCICFilter;
+  lp: array[0 .. BandCount - 1] of TDoubleDynArray;
+  resamp: array[0 .. BandCount - 1] of TDoubleDynArray;
 begin
   WriteLn('MakeDstData');
 
@@ -973,43 +895,37 @@ begin
     SetLength(bnd.dstData, Length(dstData));
     FillWord(bnd.dstData[0], Length(dstData), 0);
 
-    offset[i] := 0;
     lp[i] := Nil;
-
-    if i < BandCount - 1 then
-    begin
-      lp[i] := TCICFilter.Create(bnd.fch, BandDenoiseStages, False);
-      offset[i] += -lp[i].Ratio + 1;
-    end;
+    if bnd.underSample > 1 then
+      lp[i] := DoFilterCoeffs(bnd.fch, BandTransFactor, False, True);
 
     bandData[i] := bnd;
   end;
 
   pos := 0;
-  try
-    for k := 0 to frames.Count - 1 do
-      for i := 0 to frames[k].SampleCount - 1 do
+  for k := 0 to frames.Count - 1 do
+  begin
+    for j := 0 to BandCount - 1 do
+      if Assigned(lp[j]) then
+        resamp[j] := DoFilter(frames[k].bands[j].dstData, lp[j])
+      else
+        resamp[j] := frames[k].bands[j].dstData;
+
+    for i := 0 to frames[k].SampleCount - 1 do
+    begin
+      for j := 0 to BandCount - 1 do
       begin
-        for j := 0 to BandCount - 1 do
+        smp := resamp[j][i];
+
+        if InRange(pos, 0, High(dstData)) then
         begin
-          smp := frames[k].bands[j].dstData[i];
-
-          if Assigned(lp[j]) then
-            smp := lp[j].ProcessSample(smp);
-
-          poso := pos + offset[j];
-          if InRange(poso, 0, High(dstData)) then
-          begin
-            bandData[j].dstData[poso] := make16BitSample(smp);
-            dstData[poso] := EnsureRange(dstData[poso] + bandData[j].dstData[poso], Low(SmallInt), High(SmallInt));
-          end;
+          bandData[j].dstData[pos] := make16BitSample(smp);
+          dstData[pos] := EnsureRange(dstData[pos] + bandData[j].dstData[pos], Low(SmallInt), High(SmallInt));
         end;
-
-        Inc(pos);
       end;
-  finally
-    for i := 0 to BandCount - 1 do
-      lp[i].Free;
+
+      Inc(pos);
+    end;
   end;
 end;
 
@@ -1018,10 +934,10 @@ var
   sinc, win, sum: Double;
   i, N: Integer;
 begin
-  N := ceil(4.6 / transFactor);
+  N := ceil(4.6 / (transFactor * fc));
   if (N mod 2) = 0 then N += 1;
 
-  //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(SampleRate * fc), ' ', N);
+  writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(SampleRate * fc), ' ', N);
 
   SetLength(Result, N);
   sum := 0;
@@ -1284,7 +1200,7 @@ begin
       //if enc.Precision > 0 then
       //  enc.SaveRSC;
 
-      enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
+      WriteLn('EAQUAL ODG = ', FloatToStr(enc.ComputeEAQUAL(enc.SampleCount, False, False, enc.srcData, enc.dstData)));
 
     finally
       enc.Free;
