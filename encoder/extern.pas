@@ -10,8 +10,8 @@ uses
 type
   TDoubleDynArray2 = array of TDoubleDynArray;
 
-procedure DoExternalSKLearn(XY: TDoubleDynArray2;  DesiredNbTiles, Precision: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
-procedure DoExternalYakmo(XY: TDoubleDynArray2;  DesiredNbTiles, RestartCount: Integer; PrintProgress: Boolean; var XYC: TIntegerDynArray);
+procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; PrintProgress: Boolean; var Clusters: TIntegerDynArray);
+procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, PrintProgress: Boolean; Centroids: TStringList; var Clusters: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
 implementation
@@ -56,7 +56,7 @@ begin
             NumBytes := p.Output.Read(outputstring[1+bytesread], available);
 
             // output to screen
-            prp := Pos(#10, Copy(outputstring, PrintLastPos, bytesread - PrintLastPos + NumBytes));
+            prp := Pos(#13#10, Copy(outputstring, PrintLastPos, bytesread - PrintLastPos + NumBytes));
             if PrintOut and (prp <> 0) then
             begin
               Write(Copy(outputstring, PrintLastPos, prp));
@@ -130,8 +130,8 @@ begin
   end;
 end;
 
-procedure DoExternalSKLearn(XY: TDoubleDynArray2; DesiredNbTiles, Precision: Integer; PrintProgress: Boolean;
-  var XYC: TIntegerDynArray);
+procedure DoExternalSKLearn(Dataset: TDoubleDynArray2; ClusterCount, Precision: Integer; PrintProgress: Boolean;
+  var Clusters: TIntegerDynArray);
 var
   i, j, st: Integer;
   InFN, Line, Output, ErrOut: String;
@@ -144,11 +144,11 @@ begin
   Shuffler := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    for i := 0 to High(XY) do
+    for i := 0 to High(Dataset) do
     begin
       Line := IntToStr(i) + ' ';
-      for j := 0 to High(XY[0]) do
-        Line := Line + FloatToStr(XY[i, j]) + ' ';
+      for j := 0 to High(Dataset[0]) do
+        Line := Line + FloatToStr(Dataset[i, j]) + ' ';
       SL.Add(Line);
     end;
 
@@ -170,7 +170,7 @@ begin
     Process.Environment.Add('OMP_NUM_THREADS=1');
 
     Process.Parameters.Add('cluster.py');
-    Process.Parameters.Add('-i "' + InFN + '" -n ' + IntToStr(DesiredNbTiles) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)));
+    Process.Parameters.Add('-i "' + InFN + '" -n ' + IntToStr(ClusterCount) + ' -t ' + FloatToStr(intpower(10.0, -Precision + 1)));
     if PrintProgress then
       Process.Parameters.Add('-d');
     Process.ShowWindow := swoHIDE;
@@ -185,11 +185,11 @@ begin
     DeleteFile(PChar(InFN + '.membership'));
     DeleteFile(PChar(InFN + '.cluster_centres'));
 
-    SetLength(XYC, SL.Count);
+    SetLength(Clusters, SL.Count);
     for i := 0 to SL.Count - 1 do
     begin
       Line := SL[i];
-      XYC[i] := StrToIntDef(Line, -1);
+      Clusters[i] := StrToIntDef(Line, -1);
     end;
   finally
     OutputStream.Free;
@@ -198,11 +198,11 @@ begin
   end;
 end;
 
-procedure DoExternalYakmo(XY: TDoubleDynArray2; DesiredNbTiles, RestartCount: Integer; PrintProgress: Boolean;
-  var XYC: TIntegerDynArray);
+procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, PrintProgress: Boolean;
+  Centroids: TStringList; var Clusters: TIntegerDynArray);
 var
   i, j, Clu, Inp: Integer;
-  InFN, Line, Output, ErrOut: String;
+  InFN, CrFN, Line, Output, ErrOut, CommonCL: String;
   SL: TStringList;
   Process: TProcess;
   OutputStream: TMemoryStream;
@@ -211,21 +211,38 @@ begin
   SL := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    for i := 0 to High(XY) do
+    for i := 0 to High(Dataset) do
     begin
       Line := IntToStr(i) + ' ';
-      for j := 0 to High(XY[0]) do
-        Line := Line + IntToStr(j) + ':' + FloatToStr(XY[i, j]) + ' ';
+      for j := 0 to High(Dataset[0]) do
+        Line := Line + IntToStr(j) + ':' + FloatToStr(Dataset[i, j]) + ' ';
       SL.Add(Line);
     end;
 
     InFN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
+
     SL.SaveToFile(InFN);
     SL.Clear;
 
+    if Assigned(Centroids) then
+      CrFN := GetTempFileName('', 'centroids-'+IntToStr(GetCurrentThreadId)+'.txt');
+
+    if Assigned(Centroids) and TestMode then
+      Centroids.SaveToFile(CrFN);
+
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'yakmo.exe';
-    Process.Parameters.Add('"' + InFN + '" - - -O 2 -k ' + IntToStr(DesiredNbTiles) + ' -m ' + IntToStr(RestartCount));
+
+    CommonCL := '-O 2 -k ' + IntToStr(ClusterCount) + ' -m ' + IntToStr(RestartCount);
+
+    if TestMode then
+      Process.Parameters.Add('- "' + CrFN + '" "' + InFN + '" ' + CommonCL)
+    else
+      if Assigned(Centroids) then
+        Process.Parameters.Add('"' + InFN + '" "' + CrFN + '" - ' + CommonCL)
+      else
+        Process.Parameters.Add('"' + InFN + '" - - ' + CommonCL);
+
     Process.ShowWindow := swoHIDE;
     Process.Priority := ppIdle;
 
@@ -234,18 +251,24 @@ begin
 
     DeleteFile(PChar(InFN));
 
+    if Assigned(Centroids) and not TestMode then
+      Centroids.LoadFromFile(CrFN);
+
+    if Assigned(Centroids) then
+      DeleteFile(PChar(CrFN));
+
     if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
       SL.LineBreak := #10;
 
     SL.Text := Output;
 
-    SetLength(XYC, SL.Count);
+    SetLength(Clusters, SL.Count);
     for i := 0 to SL.Count - 1 do
     begin
       Line := SL[i];
       if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
           TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
-        XYC[Inp] := Clu;
+        Clusters[Inp] := Clu;
     end;
   finally
     OutputStream.Free;

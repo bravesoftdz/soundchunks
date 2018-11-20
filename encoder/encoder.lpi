@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CONFIG>
   <ProjectOptions>
-    <Version Value="10"/>
+    <Version Value="11"/>
     <PathDelim Value="\"/>
     <General>
       <Flags>
@@ -56,7 +56,7 @@
               <Define0 Value="DEBUG"/>
             </OtherDefines>
             <ExecuteAfter>
-              <CompileReasons Compile="False" Build="False"/>
+              <CompileReasons Compile="False" Build="False" Run="False"/>
             </ExecuteAfter>
           </Other>
         </CompilerOptions>
@@ -108,9 +108,16 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <FormatVersion Value="1"/>
-        <CommandLineParams Value="..\my_test\testn44.wav ..\out2.wav -py -v -br96"/>
+        <CommandLineParams Value="..\my_test\testenv.wav ..\out2.wav -v -br128 -vfr0.5 -cs16 -obd12 -pr1"/>
       </local>
+      <FormatVersion Value="2"/>
+      <Modes Count="1">
+        <Mode0 Name="default">
+          <local>
+            <CommandLineParams Value="..\my_test\testenv.wav ..\out2.wav -v -br128 -vfr0.5 -cs16 -obd12 -pr1"/>
+          </local>
+        </Mode0>
+      </Modes>
     </RunParams>
     <Units Count="4">
       <Unit0>
@@ -156,12 +163,13 @@
         <StackChecks Value="True"/>
       </Checks>
       <VerifyObjMethodCallValidity Value="True"/>
+      <Optimizations>
+        <OptimizationLevel Value="0"/>
+      </Optimizations>
     </CodeGeneration>
     <Linking>
       <Debugging>
-        <DebugInfoType Value="dsStabs"/>
-        <UseHeaptrc Value="True"/>
-        <TrashVariables Value="True"/>
+        <UseLineInfoUnit Value="False"/>
       </Debugging>
     </Linking>
     <Other>
