@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, correlation, anysort;
 
 const
-  BandCount = 1;
+  BandCount = 4;
 
 type
   TEncoder = class;
@@ -115,8 +115,7 @@ type
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
-    StoredBitDepth: Integer; // max 8Bits
-    OutputBitDepth: Integer; // 8 to 16Bits
+    ChunkBitDepth: Integer; // 1 to 8Bits
     ChunkSize: Integer;
     MaxChunksPerFrame: Integer;
     AlternateReduce: Boolean;
@@ -241,7 +240,7 @@ var
 begin
   SetLength(data, Length(srcData));
   for i := 0 to High(data) do
-    data[i] := srcData[i] * (1 shl (7 - dstBitShift));
+    data[i] := srcData[i] * (1 shl dstBitShift);
   dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
@@ -270,10 +269,10 @@ begin
     acc := 0.0;
 
     for i := 0 to mixList.Count - 1 do
-      acc += mixList[i].srcData[k] * (1 shl (7 - mixList[i].dstBitShift));
+      acc += mixList[i].srcData[k] * (1 shl mixList[i].dstBitShift);
 
     srcData[k] := acc;
-    dstData[k] := TEncoder.makeOutputSample(acc / mixList.Count, frame.encoder.StoredBitDepth, dstBitShift);
+    dstData[k] := TEncoder.makeOutputSample(acc / mixList.Count, frame.encoder.ChunkBitDepth, dstBitShift);
   end;
 end;
 
@@ -285,8 +284,8 @@ begin
   hiSmp := 0;
   for i := 0 to frame.encoder.chunkSize - 1 do
     hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
-  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), 24 - frame.encoder.OutputBitDepth, 16);
-  dstBitShift := bitRange - frame.encoder.StoredBitDepth - 1;
+  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), 8, 16);
+  dstBitShift := 16 - bitRange;
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -321,7 +320,7 @@ var
 begin
   SetLength(dstData, frame.encoder.chunkSize);
   for i := 0 to frame.encoder.chunkSize - 1 do
-    dstData[i] := TEncoder.makeOutputSample(srcData[i], frame.encoder.StoredBitDepth, dstBitShift);
+    dstData[i] := TEncoder.makeOutputSample(srcData[i], frame.encoder.ChunkBitDepth, dstBitShift);
 end;
 
 { TBand }
@@ -403,7 +402,7 @@ begin
 
     for j := 0 to frame.encoder.chunkSize - 1 do
     begin
-      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.StoredBitDepth, chunk.dstBitShift);
+      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.dstBitShift);
 
       for k := 0 to globalData^.underSample - 1 do
       begin
@@ -423,7 +422,7 @@ begin
   index := idx;
   SampleCount := endSample - startSample + 1;
 
-  //Assert(ChunkCount < 256 * MDBlockBufferLen * trunc(8 / log2(encoder.OutputBitDepth - 7)), 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
+  //Assert(ChunkCount < 256 * MDBlockBufferLen * trunc(8 / log2(encoder.ChunkBitDepth)), 'Frame too big! (VariableFrameSizeRatio too high and/or BitRate too low)');
 
   for i := 0 to BandCount - 1 do
     bands[i] := TBand.Create(Self, i, startSample, endSample);
@@ -519,7 +518,6 @@ begin
       end;
 
     chunk.FinalizeMix;
-    //chunk.MakeDstData;
   end;
 end;
 
@@ -631,7 +629,7 @@ begin
   //
   //    for k := 0 to cl.Count - 1 do
   //    begin
-  //      if (k and 7 = 0) and (OutputBitDepth > 8) then
+  //      if (k and 7 = 0) and (ChunkBitDepth > 8) then
   //      begin
   //        b := 0;
   //        for l := k to k + 7 do
@@ -752,7 +750,7 @@ begin
   frameCost := MaxChunksPerFrame * ChunkSize;
   fixedCost := 0;
   for i := 0 to BandCount - 1 do
-    fixedCost += (SampleCount * (round(log2(MaxChunksPerFrame)) + round(log2(OutputBitDepth - 7)))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Byte);
+    fixedCost += (SampleCount * (round(log2(MaxChunksPerFrame)) + round(log2(ChunkBitDepth)))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Byte);
 
   FrameCount := (ProjectedByteSize - fixedCost - 1) div frameCost + 1;
 
@@ -778,7 +776,7 @@ begin
   avgPower := 0.0;
   for i := 0 to SampleCount - 1 do
     avgPower += abs(makeFloatSample(srcData[i]));
-  avgPower /= BandCount * SampleCount;
+  avgPower /= SampleCount;
 
   totalPower := 0.0;
   for i := 0 to SampleCount - 1 do
@@ -879,13 +877,12 @@ begin
   Precision := 1;
   LowCut := 32.703125; // C1
   HighCut := 24000.0;
-  OutputBitDepth := 16;
+  ChunkBitDepth := 8;
   ChunkSize := 4;
   AlternateReduce := False;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
 
-  StoredBitDepth := 8;
   MaxChunksPerFrame := 4096;
   BandTransFactor := 0.001;
 
@@ -1009,10 +1006,10 @@ end;
 
 class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, bitShift: Integer): Byte;
 var
-  smp16: SmallInt;
+  smpI: Integer;
 begin
-  smp16 := round(smp * (1 shl (15 - bitShift)));
-  Result := EnsureRange(smp16 + (1 shl (OutBitDepth - 1)), 0, (1 shl OutBitDepth) - 1);
+  smpI := round(smp * (1 shl (OutBitDepth - 1 + bitShift)));
+  Result := EnsureRange(smpI + (1 shl (OutBitDepth - 1)), 0, (1 shl OutBitDepth) - 1);
 end;
 
 class function TEncoder.makeFloatSample(smp: SmallInt): Double;
@@ -1022,10 +1019,10 @@ end;
 
 class function TEncoder.makeFloatSample(smp: Byte; OutBitDepth, bitShift: Integer): Double;
 var
-  smp16: SmallInt;
+  smpI: Integer;
 begin
-  smp16 := SmallInt(smp) - (1 shl (OutBitDepth - 1));
-  Result := smp16 / (1 shl (15 - bitShift));
+  smpI := Integer(smp) - (1 shl (OutBitDepth - 1));
+  Result := smpI / (1 shl (OutBitDepth - 1 + bitShift));
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
@@ -1154,6 +1151,26 @@ begin
   Result := PearsonCorrelation(rr, rt, len);
 end;
 
+procedure test_makeSample;
+var
+  i: Integer;
+  b, bb, bbb, o: byte;
+  f: Double;
+begin
+  for i := 0 to 255 do
+  begin
+    b := i mod 256;//random(256);
+    bb := 8;//RandomRange(1, 9);
+    bbb := 0;//RandomRange(0, 8);
+    b := b and ((1 shl bb) - 1);
+
+    f := TEncoder.makeFloatSample(b, bb, bbb);
+    o := TEncoder.makeOutputSample(f, bb, bbb);
+    writeln(b,#9,bb,#9,bbb,#9,o,#9,FloatToStr(f));
+    assert(b = o);
+  end;
+end;
+
 var
   enc: TEncoder;
   i: Integer;
@@ -1169,6 +1186,8 @@ begin
     SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
 {$endif}
 
+    //test_makeSample;
+
     if ParamCount < 2 then
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
@@ -1181,7 +1200,7 @@ begin
       Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
       WriteLn(#9'-ar'#9'use alternate clustering reduce method');
-      WriteLn(#9'-obd'#9'output bit depth (8-16)');
+      WriteLn(#9'-cbd'#9'chunk bit depth (1-8)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
 
       WriteLn;
@@ -1194,11 +1213,11 @@ begin
     try
       enc.BitRate := round(ParamValue('-br', enc.BitRate));
       enc.Precision := round(ParamValue('-pr', enc.Precision));
-      enc.LowCut :=  ParamValue('-lc', enc.LowCut);
-      enc.HighCut :=  ParamValue('-hc', enc.HighCut);
-      enc.VariableFrameSizeRatio :=  ParamValue('-vfr', enc.VariableFrameSizeRatio);
-      enc.OutputBitDepth :=  round(ParamValue('-obd', enc.OutputBitDepth));
-      enc.ChunkSize :=  round(ParamValue('-cs', enc.ChunkSize));
+      enc.LowCut := ParamValue('-lc', enc.LowCut);
+      enc.HighCut := ParamValue('-hc', enc.HighCut);
+      enc.VariableFrameSizeRatio :=  EnsureRange(ParamValue('-vfr', enc.VariableFrameSizeRatio), 0.0, 1.0);
+      enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 8);
+      enc.ChunkSize := round(ParamValue('-cs', enc.ChunkSize));
       enc.Verbose := HasParam('-v');
       enc.AlternateReduce := HasParam('-ar');
 
@@ -1210,7 +1229,7 @@ begin
       begin
         WriteLn('ChunkSize = ', enc.ChunkSize);
         WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
-        WriteLn('OutputBitDepth = ', enc.OutputBitDepth);
+        WriteLn('ChunkBitDepth = ', enc.ChunkBitDepth);
         WriteLn('Precision = ', enc.Precision);
       end;
       WriteLn;
