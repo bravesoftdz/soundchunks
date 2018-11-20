@@ -13,6 +13,7 @@ type
 procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; PrintProgress: Boolean; var Clusters: TIntegerDynArray);
 procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, PrintProgress: Boolean; Centroids: TStringList; var Clusters: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
+function GetSVMLightLine(index: Integer; lines: TStringList): TDoubleDynArray;
 
 implementation
 
@@ -215,7 +216,7 @@ begin
     begin
       Line := IntToStr(i) + ' ';
       for j := 0 to High(Dataset[0]) do
-        Line := Line + IntToStr(j) + ':' + FloatToStr(Dataset[i, j]) + ' ';
+        Line := Line + IntToStr(j + 1) + ':' + FloatToStr(Dataset[i, j]) + ' ';
       SL.Add(Line);
     end;
 
@@ -334,6 +335,27 @@ begin
   finally
     OutputStream.Free;
     OutSL.Free;
+  end;
+end;
+
+function GetSVMLightLine(index: Integer; lines: TStringList): TDoubleDynArray;
+var
+  i, p, pp: Integer;
+  line: String;
+begin
+  // TODO: so far, only compatble with YAKMO centroids
+  line := lines[2];
+  SetLength(Result, StrToInt(copy(line, 1, Pos(' ', line) - 1)));
+
+  line := lines[3 + index];
+  for i := 0 to High(Result) do
+  begin
+    p := Pos(':', line) + 1;
+    pp := PosEx(' ', line, p) + 1;
+    if pp = 1 then
+      pp := Length(line) + 1;
+    Result[i] := StrToFloat(Copy(line, p, pp - p - 1));
+    line := Copy(line, pp);
   end;
 end;
 
