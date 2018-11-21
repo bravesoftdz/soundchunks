@@ -108,13 +108,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\my_test\testenv.wav ..\out2.wav -v -br128 -vfr0.5 -cs16 -obd12 -pr1"/>
+        <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out2.wav -v -br128 -vfr0.5 -cs16"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\my_test\testenv.wav ..\out2.wav -v -br128 -vfr0.5 -cs16 -obd12 -pr1"/>
+            <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out2.wav -v -br128 -vfr0.5 -cs16"/>
           </local>
         </Mode0>
       </Modes>
@@ -167,11 +167,6 @@
         <OptimizationLevel Value="0"/>
       </Optimizations>
     </CodeGeneration>
-    <Linking>
-      <Debugging>
-        <UseLineInfoUnit Value="False"/>
-      </Debugging>
-    </Linking>
     <Other>
       <CustomOptions Value="-dDEBUG"/>
       <OtherDefines Count="1">

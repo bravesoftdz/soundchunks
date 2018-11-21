@@ -343,7 +343,7 @@ var
   i, p, pp: Integer;
   line: String;
 begin
-  // TODO: so far, only compatble with YAKMO centroids
+  // TODO: so far, only compatible with YAKMO centroids
   line := lines[2];
   SetLength(Result, StrToInt(copy(line, 1, Pos(' ', line) - 1)));
 

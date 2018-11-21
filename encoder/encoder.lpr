@@ -35,8 +35,6 @@ type
     underSample: Integer;
     dstBitShift: Integer;
 
-    mixList: TChunkList;
-
     origSrcData: PDouble;
     srcData: TDoubleDynArray;
     dct: TDoubleDynArray;
@@ -46,9 +44,6 @@ type
     destructor Destroy; override;
 
     procedure ComputeDCT;
-    procedure InitMix;
-    procedure AddToMix(chk: TChunk);
-    procedure FinalizeMix;
     procedure ComputeBitRange;
     procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
@@ -98,7 +93,6 @@ type
 
     procedure MakeChunks;
     procedure KMeansReduce;
-    procedure SortAndReindexReducedChunks;
     procedure MakeDstData;
   end;
 
@@ -200,11 +194,6 @@ begin
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
 end;
 
-function CompareReducedChunks(const Item1, Item2: TChunk): Integer;
-begin
-  Result := CompareValue(Item2.mixList.Count, Item1.mixList.Count);
-end;
-
 { TChunk }
 
 constructor TChunk.Create(frm: TFrame; idx: Integer; underSmp: Integer; srcDta: PDouble);
@@ -222,14 +211,10 @@ begin
   end;
 
   reducedChunk := Self;
-
-  mixList := TChunkList.Create(False);
 end;
 
 destructor TChunk.Destroy;
 begin
-  mixList.Free;
-
   inherited Destroy;
 end;
 
@@ -242,38 +227,6 @@ begin
   for i := 0 to High(data) do
     data[i] := srcData[i] * (1 shl dstBitShift);
   dct := TEncoder.ComputeDCT(Length(data), data);
-end;
-
-procedure TChunk.InitMix;
-begin
-  mixList.Clear;
-end;
-
-procedure TChunk.AddToMix(chk: TChunk);
-begin
-  mixList.Add(chk);
-end;
-
-procedure TChunk.FinalizeMix;
-var
-  i, k: Integer;
-  acc: Double;
-begin
-  if not Assigned(mixList) or (mixList.Count = 0) then
-    Exit;
-
-  SetLength(dstData, frame.encoder.chunkSize);
-
-  for k := 0 to frame.encoder.chunkSize - 1 do
-  begin
-    acc := 0.0;
-
-    for i := 0 to mixList.Count - 1 do
-      acc += mixList[i].srcData[k] * (1 shl mixList[i].dstBitShift);
-
-    srcData[k] := acc;
-    dstData[k] := TEncoder.makeOutputSample(acc / mixList.Count, frame.encoder.ChunkBitDepth, dstBitShift);
-  end;
 end;
 
 procedure TChunk.ComputeBitRange;
@@ -474,7 +427,7 @@ begin
   begin
     bands[i].MakeChunks;
     for j := 0 to bands[i].finalChunks.Count - 1 do
-      for k := 1 to bands[i].globalData^.underSample do
+      for k := 1 to round(power(bands[i].globalData^.underSample, 2)) do
         chunkRefs.Add(bands[i].finalChunks[j]);
   end;
 end;
@@ -483,6 +436,7 @@ procedure TFrame.KMeansReduce;
 var
   i, j, prec: Integer;
   chunk: TChunk;
+  centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
   Dataset: TReal2DArray;
 begin
@@ -508,25 +462,14 @@ begin
 
     reducedChunks.Add(chunk);
 
-    chunk.InitMix;
+    centroid := GetSVMLightLine(i, Centroids);
 
-    for j := 0 to chunkRefs.Count - 1 do
-      if Clusters[j] = i then
-      begin
-        chunk.AddToMix(chunkRefs[j]);
-        chunkRefs[j].reducedChunk := chunk;
-      end;
+    centroid := TEncoder.ComputeInvDCT(encoder.ChunkSize, centroid);
 
-    chunk.FinalizeMix;
+    SetLength(chunk.dstData, encoder.chunkSize);
+    for j := 0 to encoder.chunkSize - 1 do
+      chunk.dstData[j] := TEncoder.makeOutputSample(centroid[j], encoder.ChunkBitDepth, 0);
   end;
-end;
-
-procedure TFrame.SortAndReindexReducedChunks;
-var i: Integer;
-begin
-  reducedChunks.Sort(@CompareReducedChunks);
-  for i := 0 to reducedChunks.Count - 1 do
-    reducedChunks[i].index := i;
 end;
 
 { TEncoder }
@@ -684,16 +627,16 @@ begin
     if i = 0 then
       bnd.fcl := LowCut / SampleRate
     else
-      bnd.fcl := 0.5 * power(2.0, -round((BandCount - i) * ratio));
+      bnd.fcl := 0.5 * power(2.0, -floor((BandCount - i) * ratio));
 
     if i = BandCount - 1 then
       bnd.fch := hc / SampleRate
     else
-      bnd.fch := 0.5 * power(2.0, -round((BandCount - 1 - i) * ratio));
+      bnd.fch := 0.5 * power(2.0, -floor((BandCount - 1 - i) * ratio));
 
     // undersample if the band high freq is a lot lower than nyquist
 
-    bnd.underSample := Max(1, round(0.25 / bnd.fch));
+    bnd.underSample := Max(1, floor(0.5 / bnd.fch));
 
     bandData[i] := bnd;
   end;
@@ -840,6 +783,7 @@ function TEncoder.DoFilter(const samples, coeffs: TDoubleDynArray): TDoubleDynAr
 var
   i: Integer;
 begin
+  Result := nil;
   ConvR1D(samples, Length(samples), coeffs, Length(coeffs), Result);
 
   for i := 0 to High(samples) do
@@ -1188,6 +1132,7 @@ begin
 
     //test_makeSample;
 
+
     if ParamCount < 2 then
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
@@ -1251,9 +1196,9 @@ begin
       cor := enc.ComputeCorrelation(enc.srcData, enc.dstData);
 
       WriteLn('EAQUAL = ', FloatToStr(dix));
-      WriteLn('Correlation = ', FormatFloat('0.000000', cor), ', ExpM1 = ', FormatFloat('0.000000', exp(cor) - 1));
+      WriteLn('Correlation = ', FormatFloat('0.000000', cor));
 
-      s := FloatToStr(dix) + ' ' + FormatFloat('0.000000', cor) + ' ' + FormatFloat('0.000000', exp(cor) - 1) + ' ';
+      s := FloatToStr(dix) + ' ' + FormatFloat('0.000000', cor) + ' ';
       for i := 0 to ParamCount do s := s + ParamStr(i) + ' ';
       ShellExecute(0, 'open', 'cmd.exe', PChar('/c echo ' + s + ' >> ..\log.txt'), '', 0);
 
