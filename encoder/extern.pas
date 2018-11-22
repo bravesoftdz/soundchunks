@@ -57,7 +57,7 @@ begin
             NumBytes := p.Output.Read(outputstring[1+bytesread], available);
 
             // output to screen
-            prp := Pos(#13#10, Copy(outputstring, PrintLastPos, bytesread - PrintLastPos + NumBytes));
+            prp := Pos(#10, Copy(outputstring, PrintLastPos, bytesread - PrintLastPos + NumBytes));
             if PrintOut and (prp <> 0) then
             begin
               Write(Copy(outputstring, PrintLastPos, prp));
@@ -340,14 +340,18 @@ end;
 
 function GetSVMLightLine(index: Integer; lines: TStringList): TDoubleDynArray;
 var
-  i, p, pp: Integer;
+  i, p, pp, clusterCount: Integer;
   line: String;
 begin
   // TODO: so far, only compatible with YAKMO centroids
+
+  line := lines[1];
+  clusterCount := StrToInt(copy(line, 1, Pos(' ', line) - 1));
+
   line := lines[2];
   SetLength(Result, StrToInt(copy(line, 1, Pos(' ', line) - 1)));
 
-  line := lines[3 + index];
+  line := lines[lines.Count - clusterCount + index];
   for i := 0 to High(Result) do
   begin
     p := Pos(':', line) + 1;
