@@ -820,7 +820,7 @@ begin
   outputFN := OutFN;
 
   BitRate := 128;
-  Precision := 1;
+  Precision := 2;
   LowCut := 0.0;
   HighCut := 24000.0;
   ChunkBitDepth := 8;
