@@ -6,6 +6,7 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap
 
 const
   BandCount = 4;
+  C1Freq = 32.703125;
 
 type
   TEncoder = class;
@@ -112,7 +113,7 @@ type
     ChunkBitDepth: Integer; // 1 to 8Bits
     ChunkSize: Integer;
     MaxChunksPerFrame: Integer;
-    AlternateReduce: Boolean;
+    ReduceBassBand: Boolean;
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
 
@@ -322,7 +323,7 @@ var
   Dataset: TReal2DArray;
 begin
   prec := frame.encoder.Precision;
-  if prec = 0 then Exit;
+  if (prec = 0) or (not frame.encoder.ReduceBassBand and (index = 0)) then Exit;
 
   SetLength(Dataset, finalChunks.Count, frame.encoder.chunkSize);
 
@@ -331,7 +332,7 @@ begin
       Dataset[i, j] := finalChunks[i].dct[j];
 
   Clusters := nil;
-  DoExternalYakmo(Dataset, 0, prec, True, False, frame.Centroids, Clusters);
+  DoExternalYakmo(Dataset, 0, 1, True, False, frame.Centroids, Clusters);
 
   for i := 0 to finalChunks.Count - 1 do
     finalChunks[i].reducedChunk := frame.reducedChunks[Clusters[i]];
@@ -426,8 +427,8 @@ begin
   for i := 0 to BandCount - 1 do
   begin
     bands[i].MakeChunks;
-    for j := 0 to bands[i].finalChunks.Count - 1 do
-      for k := 1 to round(power(bands[i].globalData^.underSample, 2)) do
+    for j := Ord(not encoder.ReduceBassBand) to bands[i].finalChunks.Count - 1 do
+      for k := 1 to round(power(bands[i].globalData^.underSample, sqrt(2.0))) do
         chunkRefs.Add(bands[i].finalChunks[j]);
   end;
 end;
@@ -443,7 +444,8 @@ begin
   prec := encoder.Precision;
   if (prec = 0) or (chunkRefs.Count <= encoder.MaxChunksPerFrame) then Exit;
 
-  //WriteLn('KMeansReduce #', index, ' ', globalData^.desiredChunkCount);
+  if encoder.Verbose then
+    WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count);
 
   SetLength(Dataset, chunkRefs.Count, encoder.chunkSize);
 
@@ -622,7 +624,7 @@ begin
     // determing low and high bandpass frequencies
 
     hc := min(HighCut, SampleRate / 2);
-    ratio := (log2(hc) - log2(LowCut)) / BandCount;
+    ratio := (log2(hc) - log2(max(C1Freq, LowCut))) / BandCount;
 
     if i = 0 then
       bnd.fcl := LowCut / SampleRate
@@ -819,16 +821,16 @@ begin
 
   BitRate := 128;
   Precision := 1;
-  LowCut := 32.703125; // C1
+  LowCut := 0.0;
   HighCut := 24000.0;
   ChunkBitDepth := 8;
   ChunkSize := 4;
-  AlternateReduce := False;
+  ReduceBassBand := False;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
 
   MaxChunksPerFrame := 4096;
-  BandTransFactor := 0.001;
+  BandTransFactor := 0.25;
 
   frames := TFrameList.Create;
 end;
@@ -894,7 +896,7 @@ var
   sinc, win, sum: Double;
   i, N: Integer;
 begin
-  N := ceil(4.6 / transFactor);
+  N := ceil(4.6 / (transFactor * fc));
   if (N mod 2) = 0 then N += 1;
 
   //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(SampleRate * fc), ' ', N);
@@ -1092,7 +1094,7 @@ begin
     rt[i] := makeFloatSample(smpTst[i]);
   end;
 
-  Result := PearsonCorrelation(rr, rt, len);
+  Result := SpearmanRankCorrelation(rr, rt, len);
 end;
 
 procedure test_makeSample;
@@ -1144,7 +1146,7 @@ begin
       WriteLn(#9'-v'#9'verbose mode');
       Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
-      WriteLn(#9'-ar'#9'use alternate clustering reduce method');
+      WriteLn(#9'-rbb'#9'enable lossy compression on bass band');
       WriteLn(#9'-cbd'#9'chunk bit depth (1-8)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
 
@@ -1164,7 +1166,7 @@ begin
       enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 8);
       enc.ChunkSize := round(ParamValue('-cs', enc.ChunkSize));
       enc.Verbose := HasParam('-v');
-      enc.AlternateReduce := HasParam('-ar');
+      enc.ReduceBassBand := HasParam('-rbb');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
@@ -1173,7 +1175,7 @@ begin
       if enc.Verbose then
       begin
         WriteLn('ChunkSize = ', enc.ChunkSize);
-        WriteLn('AlternateReduce = ', BoolToStr(enc.AlternateReduce, True));
+        WriteLn('ReduceBassBand = ', BoolToStr(enc.ReduceBassBand, True));
         WriteLn('ChunkBitDepth = ', enc.ChunkBitDepth);
         WriteLn('Precision = ', enc.Precision);
       end;
