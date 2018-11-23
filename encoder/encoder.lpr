@@ -110,7 +110,7 @@ type
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
-    ChunkBitDepth: Integer; // 1 to 8Bits
+    ChunkBitDepth: Integer; // 1 to 8 Bits
     ChunkSize: Integer;
     MaxChunksPerFrame: Integer;
     ReduceBassBand: Boolean;
@@ -638,7 +638,7 @@ begin
 
     // undersample if the band high freq is a lot lower than nyquist
 
-    bnd.underSample := Max(1, floor(0.5 / bnd.fch));
+    bnd.underSample := Max(1, round(0.25 / bnd.fch));
 
     bandData[i] := bnd;
   end;
