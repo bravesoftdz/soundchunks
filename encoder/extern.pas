@@ -11,7 +11,7 @@ type
   TDoubleDynArray2 = array of TDoubleDynArray;
 
 procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; PrintProgress: Boolean; var Clusters: TIntegerDynArray);
-procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, PrintProgress: Boolean; Centroids: TStringList; var Clusters: TIntegerDynArray);
+procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, NoClusters, PrintProgress: Boolean; Centroids: TStringList; var Clusters: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 function GetSVMLightLine(index: Integer; lines: TStringList): TDoubleDynArray;
 
@@ -199,7 +199,7 @@ begin
   end;
 end;
 
-procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, PrintProgress: Boolean;
+procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, NoClusters, PrintProgress: Boolean;
   Centroids: TStringList; var Clusters: TIntegerDynArray);
 var
   i, j, Clu, Inp: Integer;
@@ -234,7 +234,7 @@ begin
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'yakmo.exe';
 
-    CommonCL := '-O 2 -k ' + IntToStr(ClusterCount) + ' -m ' + IntToStr(RestartCount);
+    CommonCL := IfThen(not NoClusters, '-O 2 ') + ' -c 2 -k ' + IntToStr(ClusterCount) + ' -m ' + IntToStr(RestartCount);
 
     if TestMode then
       Process.Parameters.Add('- "' + CrFN + '" "' + InFN + '" ' + CommonCL)
@@ -258,18 +258,21 @@ begin
     if Assigned(Centroids) then
       DeleteFile(PChar(CrFN));
 
-    if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
-      SL.LineBreak := #10;
-
-    SL.Text := Output;
-
-    SetLength(Clusters, SL.Count);
-    for i := 0 to SL.Count - 1 do
+    if not NoClusters then
     begin
-      Line := SL[i];
-      if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
-          TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
-        Clusters[Inp] := Clu;
+      if (Pos(#10, Output) <> Pos(#13#10, Output) + 1) then
+        SL.LineBreak := #10;
+
+      SL.Text := Output;
+
+      SetLength(Clusters, SL.Count);
+      for i := 0 to SL.Count - 1 do
+      begin
+        Line := SL[i];
+        if TryStrToInt(Copy(Line, 1, Pos(' ', Line) - 1), Inp) and
+            TryStrToInt(RightStr(Line, Pos(' ', ReverseString(Line)) - 1), Clu) then
+          Clusters[Inp] := Clu;
+      end;
     end;
   finally
     OutputStream.Free;
