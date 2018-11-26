@@ -237,9 +237,10 @@ var
 begin
   hiSmp := 0;
   for i := 0 to frame.encoder.chunkSize - 1 do
-    hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
-  bitRange := EnsureRange(ceil(1.0 + log2(hiSmp + 1.0)), 9, 16);
-  dstBitShift := 16 - bitRange;
+    hiSmp := max(hiSmp, ceil(abs(srcData[i] * High(SmallInt))));
+  bitRange := ceil(log2(hiSmp));
+  bitRange := EnsureRange(bitRange, 7, 15); // hiSmp is 0 - 32767 by design
+  dstBitShift := 15 - bitRange;
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -852,11 +853,15 @@ var
   smp: Double;
   bnd: TBandGlobalData;
   resamp: array[0 .. BandCount - 1] of TDoubleDynArray;
+  floatDst: TDoubleDynArray;
 begin
   WriteLn('MakeDstData');
 
   SetLength(dstData, SampleCount);
   FillWord(dstData[0], Length(dstData), 0);
+
+  SetLength(floatDst, SampleCount);
+  FillQWord(floatDst[0], Length(floatDst), 0);
 
   for i := 0 to BandCount - 1 do
   begin
@@ -881,18 +886,25 @@ begin
     begin
       for j := 0 to BandCount - 1 do
       begin
+{$if true}
         smp := resamp[j][i];
+{$else}
+        smp := frames[k].bands[j].dstData[i];
+{$endif}
 
         if InRange(pos, 0, High(dstData)) then
         begin
           bandData[j].dstData[pos] := make16BitSample(smp);
-          dstData[pos] := EnsureRange(dstData[pos] + bandData[j].dstData[pos], Low(SmallInt), High(SmallInt));
+          floatDst[pos] := floatDst[pos] + smp;
         end;
       end;
 
       Inc(pos);
     end;
   end;
+
+  for i := 0 to High(floatDst) do
+    dstData[i] := make16BitSample(floatDst[i]);
 end;
 
 function TEncoder.DoFilterCoeffs(fc, transFactor: Double; HighPass, Windowed: Boolean): TDoubleDynArray;
@@ -949,22 +961,33 @@ begin
   end;
 end;
 
+function computeOutputFormatBias(bitShift: Integer): Double;
+begin
+  Result := (1 shl (16 - bitshift)) * (0.25 / High(SmallInt));
+end;
+
+const
+  floatFrom16BitBias = 1.0 / High(SmallInt);
+
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
-  Result := EnsureRange(round(smp * -Low(SmallInt)), Low(SmallInt), High(SmallInt));
+  smp -= floatFrom16BitBias;
+  Result := EnsureRange(round(smp * High(SmallInt)), Low(SmallInt), High(SmallInt));
 end;
 
 class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, bitShift: Integer): Byte;
 var
   smpI: Integer;
 begin
+  smp -= computeOutputFormatBias(bitShift);
   smpI := round(smp * (1 shl (OutBitDepth - 1 + bitShift)));
   Result := EnsureRange(smpI + (1 shl (OutBitDepth - 1)), 0, (1 shl OutBitDepth) - 1);
 end;
 
 class function TEncoder.makeFloatSample(smp: SmallInt): Double;
 begin
-  Result := smp / -Low(SmallInt);
+  Result := smp / High(SmallInt);
+  Result += floatFrom16BitBias;
 end;
 
 class function TEncoder.makeFloatSample(smp: Byte; OutBitDepth, bitShift: Integer): Double;
@@ -973,6 +996,7 @@ var
 begin
   smpI := Integer(smp) - (1 shl (OutBitDepth - 1));
   Result := smpI / (1 shl (OutBitDepth - 1 + bitShift));
+  Result += computeOutputFormatBias(bitShift);
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
