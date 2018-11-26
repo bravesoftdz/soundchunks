@@ -238,7 +238,7 @@ begin
   hiSmp := 0;
   for i := 0 to frame.encoder.chunkSize - 1 do
     hiSmp := max(hiSmp, abs(TEncoder.make16BitSample(srcData[i])));
-  bitRange := EnsureRange(1 + ceil(log2(hiSmp + 1.0)), 8, 16);
+  bitRange := EnsureRange(ceil(1.0 + log2(hiSmp + 1.0)), 9, 16);
   dstBitShift := 16 - bitRange;
 end;
 
@@ -332,7 +332,7 @@ begin
       Dataset[i, j] := finalChunks[i].dct[j];
 
   Clusters := nil;
-  DoExternalYakmo(Dataset, 0, 1, True, False, frame.Centroids, Clusters);
+  DoExternalYakmo(Dataset, 0, 1, True, False, False, frame.Centroids, Clusters);
 
   for i := 0 to finalChunks.Count - 1 do
     finalChunks[i].reducedChunk := frame.reducedChunks[Clusters[i]];
@@ -447,14 +447,18 @@ begin
   if encoder.Verbose then
     WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count);
 
-  SetLength(Dataset, chunkRefs.Count, encoder.chunkSize);
+  SetLength(Dataset, chunkRefs.Count + 1 + ord(odd(chunkRefs.Count + 1)), encoder.chunkSize);
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to encoder.chunkSize - 1 do
-      Dataset[i, j] := chunkRefs[i].dct[j];
+      Dataset[i + 1, j] := chunkRefs[i].dct[j];
+
+  // fill potential evening line with last proper one data
+  for j := 0 to encoder.chunkSize - 1 do
+    Dataset[High(Dataset), j] := chunkRefs.Last.dct[j];
 
   Clusters := nil;
-  DoExternalYakmo(Dataset, encoder.MaxChunksPerFrame, prec, False, False, Centroids, Clusters);
+  DoExternalYakmo(Dataset, encoder.MaxChunksPerFrame, prec, False, True, False, Centroids, Clusters);
 
   reducedChunks.Clear;
   reducedChunks.Capacity := encoder.MaxChunksPerFrame;
@@ -1194,13 +1198,13 @@ begin
       if enc.Precision > 0 then
         enc.SaveRSC;
 
-      dix := enc.ComputeEAQUAL(enc.SampleCount, False, True, enc.srcData, enc.dstData);
+      dix := enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
       cor := enc.ComputeCorrelation(enc.srcData, enc.dstData);
 
       WriteLn('EAQUAL = ', FloatToStr(dix));
-      WriteLn('Correlation = ', FormatFloat('0.000000', cor));
+      WriteLn('Correlation = ', FormatFloat(',0.0000000000', cor));
 
-      s := FloatToStr(dix) + ' ' + FormatFloat('0.000000', cor) + ' ';
+      s := FloatToStr(dix) + ' ' + FormatFloat(',0.0000000000', cor) + ' ';
       for i := 0 to ParamCount do s := s + ParamStr(i) + ' ';
       ShellExecute(0, 'open', 'cmd.exe', PChar('/c echo ' + s + ' >> ..\log.txt'), '', 0);
 
