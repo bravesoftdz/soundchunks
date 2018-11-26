@@ -45,7 +45,7 @@ type
     destructor Destroy; override;
 
     procedure ComputeDCT;
-    procedure ComputeBitRange;
+    procedure ComputeBitShift;
     procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
   end;
@@ -135,6 +135,7 @@ type
     class function makeOutputSample(smp: Double; OutBitDepth, bitShift: Integer): Byte;
     class function makeFloatSample(smp: SmallInt): Double; overload;
     class function makeFloatSample(smp: Byte; OutBitDepth, bitShift: Integer): Double; overload;
+    class function ComputeBitShift(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
@@ -230,17 +231,9 @@ begin
   dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
-procedure TChunk.ComputeBitRange;
-var
-  i, hiSmp: Integer;
-  bitRange: Integer;
+procedure TChunk.ComputeBitShift;
 begin
-  hiSmp := 0;
-  for i := 0 to frame.encoder.chunkSize - 1 do
-    hiSmp := max(hiSmp, ceil(abs(srcData[i] * High(SmallInt))));
-  bitRange := ceil(log2(hiSmp));
-  bitRange := EnsureRange(bitRange, 7, 15); // hiSmp is 0 - 32767 by design
-  dstBitShift := 15 - bitRange;
+  dstBitShift := TEncoder.ComputeBitShift(frame.encoder.chunkSize, srcData);
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -310,7 +303,7 @@ begin
   for i := 0 to ChunkCount - 1 do
   begin
     chunk := TChunk.Create(frame, i, globalData^.underSample, srcData);
-    chunk.ComputeBitRange;
+    chunk.ComputeBitShift;
     chunk.ComputeDCT;
     chunk.MakeDstData;
     finalChunks.Add(chunk);
@@ -963,11 +956,11 @@ end;
 
 function computeOutputFormatBias(bitShift: Integer): Double;
 begin
-  Result := (1 shl (16 - bitshift)) * (0.25 / High(SmallInt));
+  Result := (1 shl (15 - bitshift)) * (0.5 / High(Word));
 end;
 
 const
-  floatFrom16BitBias = 1.0 / High(SmallInt);
+  floatFrom16BitBias = 0.5 / High(Word);
 
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
@@ -997,6 +990,19 @@ begin
   smpI := Integer(smp) - (1 shl (OutBitDepth - 1));
   Result := smpI / (1 shl (OutBitDepth - 1 + bitShift));
   Result += computeOutputFormatBias(bitShift);
+end;
+
+class function TEncoder.ComputeBitShift(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
+var
+  i, hiSmp: Integer;
+  bitRgne: Integer;
+begin
+  hiSmp := 0;
+  for i := 0 to chunkSz - 1 do
+    hiSmp := max(hiSmp, ceil(abs(samples[i] * High(SmallInt))));
+  bitRgne := ceil(log2(hiSmp));
+  bitRgne := max(bitRgne, 7); // hiSmp is 0 - 32767 by design
+  Result := 15 - bitRgne;
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
