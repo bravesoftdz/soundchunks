@@ -234,7 +234,7 @@ begin
     Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
     Process.Executable := 'yakmo.exe';
 
-    CommonCL := IfThen(not NoClusters, '-O 2 ') + ' -c 2 -k ' + IntToStr(ClusterCount) + ' -m ' + IntToStr(RestartCount);
+    CommonCL := IfThen(not NoClusters, ' -O 2 ') + ' -k ' + IntToStr(ClusterCount) + ' -m ' + IntToStr(RestartCount);
 
     if TestMode then
       Process.Parameters.Add('- "' + CrFN + '" "' + InFN + '" ' + CommonCL)

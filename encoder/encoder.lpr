@@ -418,10 +418,10 @@ var
   i, j, k: Integer;
 begin
   chunkRefs.Clear;
-  for i := 0 to BandCount - 1 do
+  for i := Ord(not encoder.ReduceBassBand) to BandCount - 1 do
   begin
     bands[i].MakeChunks;
-    for j := Ord(not encoder.ReduceBassBand) to bands[i].finalChunks.Count - 1 do
+    for j := 0 to bands[i].finalChunks.Count - 1 do
       for k := 1 to round(power(bands[i].globalData^.underSample, sqrt(2.0))) do
         chunkRefs.Add(bands[i].finalChunks[j]);
   end;
@@ -441,15 +441,11 @@ begin
   if encoder.Verbose then
     WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count);
 
-  SetLength(Dataset, chunkRefs.Count + 1 + ord(odd(chunkRefs.Count + 1)), encoder.chunkSize);
+  SetLength(Dataset, chunkRefs.Count, encoder.chunkSize);
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to encoder.chunkSize - 1 do
-      Dataset[i + 1, j] := chunkRefs[i].dct[j];
-
-  // fill potential evening line with last proper one data
-  for j := 0 to encoder.chunkSize - 1 do
-    Dataset[High(Dataset), j] := chunkRefs.Last.dct[j];
+      Dataset[i, j] := chunkRefs[i].dct[j];
 
   Clusters := nil;
   DoExternalYakmo(Dataset, encoder.MaxChunksPerFrame, prec, False, True, False, Centroids, Clusters);
