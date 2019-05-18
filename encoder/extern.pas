@@ -13,6 +13,9 @@ type
 procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; PrintProgress: Boolean; var Clusters: TIntegerDynArray);
 procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, NoClusters, PrintProgress: Boolean; Centroids: TStringList; var Clusters: TIntegerDynArray);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
+
+procedure GenerateSVMLightData(Dataset: TDoubleDynArray2; Output: TStringList);
+function GenerateSVMLightFile(Dataset: TDoubleDynArray2): String;
 function GetSVMLightLine(index: Integer; lines: TStringList): TDoubleDynArray;
 
 implementation
@@ -202,7 +205,7 @@ end;
 procedure DoExternalYakmo(Dataset: TDoubleDynArray2; ClusterCount, RestartCount: Integer; TestMode, NoClusters, PrintProgress: Boolean;
   Centroids: TStringList; var Clusters: TIntegerDynArray);
 var
-  i, j, Clu, Inp: Integer;
+  i, Clu, Inp: Integer;
   InFN, CrFN, Line, Output, ErrOut, CommonCL: String;
   SL: TStringList;
   Process: TProcess;
@@ -212,18 +215,7 @@ begin
   SL := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
-    for i := 0 to High(Dataset) do
-    begin
-      Line := IntToStr(i) + ' ';
-      for j := 0 to High(Dataset[0]) do
-        Line := Line + IntToStr(j + 1) + ':' + FloatToStr(Dataset[i, j]) + ' ';
-      SL.Add(Line);
-    end;
-
-    InFN := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
-
-    SL.SaveToFile(InFN);
-    SL.Clear;
+    InFN := GenerateSVMLightFile(Dataset);
 
     if Assigned(Centroids) then
       CrFN := GetTempFileName('', 'centroids-'+IntToStr(GetCurrentThreadId)+'.txt');
@@ -338,6 +330,38 @@ begin
   finally
     OutputStream.Free;
     OutSL.Free;
+  end;
+end;
+
+procedure GenerateSVMLightData(Dataset: TDoubleDynArray2; Output: TStringList);
+var
+  i, j: Integer;
+  Line: String;
+begin
+  Output.Clear;
+
+  for i := 0 to High(Dataset) do
+  begin
+    Line := IntToStr(i) + ' ';
+    for j := 0 to High(Dataset[0]) do
+      Line := Line + IntToStr(j + 1) + ':' + FloatToStr(Dataset[i, j]) + ' ';
+    Output.Add(Line);
+  end;
+end;
+
+function GenerateSVMLightFile(Dataset: TDoubleDynArray2): String;
+var
+  SL: TStringList;
+begin
+  SL := TStringList.Create;
+  try
+    GenerateSVMLightData(Dataset, SL);
+
+    Result := GetTempFileName('', 'dataset-'+IntToStr(GetCurrentThreadId)+'.txt');
+
+    SL.SaveToFile(Result);
+  finally
+    SL.Free;
   end;
 end;
 
