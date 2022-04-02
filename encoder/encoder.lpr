@@ -86,7 +86,7 @@ type
     FrameSize: Integer;
 
     chunkRefs, reducedChunks: TChunkList;
-    Centroids: TStringList;
+    Centroids: TReal2DArray;
 
     bands: array[0..BandCount - 1] of TBand;
 
@@ -141,6 +141,7 @@ type
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
+    class procedure createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
 
     constructor Create(InFN, OutFN: String);
     destructor Destroy; override;
@@ -328,26 +329,34 @@ begin
 end;
 
 procedure TBand.FindBestFinalChunks;
-var
-  i, j, prec: Integer;
-  Clusters: TIntegerDynArray;
-  Dataset: TReal2DArray;
+//var
+//  i, j, prec: Integer;
+//  Clusters: TIntegerDynArray;
+//  Dataset: TReal2DArray;
+//  Yakmo: PYakmo;
 begin
-  prec := frame.encoder.Precision;
-  if (prec = 0) or (not frame.encoder.ReduceBassBand and (index = 0)) then
-    Exit;
-
-  SetLength(Dataset, finalChunks.Count, frame.encoder.chunkSize);
-
-  for i := 0 to finalChunks.Count - 1 do
-    for j := 0 to frame.encoder.chunkSize - 1 do
-      Dataset[i, j] := finalChunks[i].dct[j];
-
-  Clusters := nil;
-  DoExternalYakmo(Dataset, 0, 1, True, False, False, frame.Centroids, Clusters);
-
-  for i := 0 to finalChunks.Count - 1 do
-    finalChunks[i].reducedChunk := frame.reducedChunks[Clusters[i]];
+  //prec := frame.encoder.Precision;
+  //if (prec = 0) or (not frame.encoder.ReduceBassBand and (index = 0)) then
+  //  Exit;
+  //
+  //SetLength(Dataset, finalChunks.Count, frame.encoder.chunkSize);
+  //
+  //for i := 0 to finalChunks.Count - 1 do
+  //  for j := 0 to frame.encoder.chunkSize - 1 do
+  //    Dataset[i, j] := finalChunks[i].dct[j];
+  //
+  //SetLength(Clusters, finalChunks.Count);
+  //SetLength(frame.Centroids, finalChunks.Count, frame.encoder.chunkSize);
+  //
+  //Yakmo := yakmo_create(0, 1, MaxInt, 1, 0, 0, 1);
+  //yakmo_load_train_data(Yakmo, finalChunks.Count, frame.encoder.chunkSize, @Dataset[0]);
+  //yakmo_train_on_data(Yakmo, @Clusters[0]);
+  //yakmo_get_centroids(Yakmo, @frame.Centroids[0]);
+  //yakmo_destroy(Yakmo);
+  //
+  //
+  //for i := 0 to finalChunks.Count - 1 do
+  //  finalChunks[i].reducedChunk := frame.reducedChunks[Clusters[i]];
 end;
 
 procedure TBand.MakeDstData;
@@ -403,14 +412,14 @@ begin
 
   chunkRefs := TChunkList.Create(False);
   reducedChunks := TChunkList.Create;
-  Centroids := TStringList.Create;
+  Centroids := nil;
 end;
 
 destructor TFrame.Destroy;
 var
   i: Integer;
 begin
-  Centroids.Free;
+  Centroids := nil;
   reducedChunks.Free;
   chunkRefs.Free;
 
@@ -433,15 +442,14 @@ end;
 
 procedure TFrame.MakeChunks;
 var
-  i, j, k: Integer;
+  i, j: Integer;
 begin
   chunkRefs.Clear;
   for i := Ord(not encoder.ReduceBassBand) to BandCount - 1 do
   begin
     bands[i].MakeChunks;
     for j := 0 to bands[i].finalChunks.Count - 1 do
-      for k := 1 to round(power(bands[i].globalData^.underSample, sqrt(2.0))) do
-        chunkRefs.Add(bands[i].finalChunks[j]);
+      chunkRefs.Add(bands[i].finalChunks[j]);
   end;
 end;
 
@@ -452,6 +460,7 @@ var
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
   Dataset: TReal2DArray;
+  Yakmo: PYakmo;
 begin
   prec := encoder.Precision;
   if prec = 0 then Exit;
@@ -469,8 +478,15 @@ begin
     if encoder.Verbose then
       WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count);
 
-    Clusters := nil;
-    DoExternalYakmo(Dataset, encoder.MaxChunksPerFrame, prec, False, True, False, Centroids, Clusters);
+    SetLength(Clusters, chunkRefs.Count);
+    SetLength(Centroids,encoder.MaxChunksPerFrame, encoder.chunkSize);
+
+    Yakmo := yakmo_create(encoder.MaxChunksPerFrame, 1, MaxInt, 1, 0, 0, 1);
+    yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
+    yakmo_train_on_data(Yakmo, @Clusters[0]);
+    yakmo_get_centroids(Yakmo, @Centroids[0]);
+    yakmo_destroy(Yakmo);
+
 
     reducedChunks.Clear;
     reducedChunks.Capacity := encoder.MaxChunksPerFrame;
@@ -480,7 +496,7 @@ begin
 
       reducedChunks.Add(chunk);
 
-      centroid := GetSVMLightLine(i, Centroids);
+      centroid := Centroids[i];
 
       centroid := TEncoder.ComputeInvDCT(encoder.ChunkSize, centroid);
 
@@ -504,10 +520,7 @@ begin
       chunk.dstData := Copy(chunkRefs[i].dstData);
     end;
 
-    GenerateSVMLightData(Dataset, Centroids);
-    Centroids.Insert(0, IntToStr(encoder.chunkSize) + ' # number of features');
-    Centroids.Insert(0, IntToStr(chunkRefs.Count) + ' # k');
-    Centroids.Insert(0, '1 # m');
+    Centroids := Dataset;
   end;
 end;
 
@@ -840,13 +853,13 @@ begin
 
   if fcl > 0.0 then
   begin
-    coeffs := DoFilterCoeffs(fcl, transFactor, True, True);
+    coeffs := DoFilterCoeffs(fcl, transFactor * fcl, True, True);
     Result := DoFilter(Result, coeffs);
   end;
 
   if fch < 0.5 then
   begin
-    coeffs := DoFilterCoeffs(fch, transFactor, False, True);
+    coeffs := DoFilterCoeffs(fch, transFactor * fch, False, True);
     Result := DoFilter(Result, coeffs);
   end;
 end;
@@ -944,7 +957,7 @@ var
   sinc, win, sum: Double;
   i, N: Integer;
 begin
-  N := ceil(4.6 / (transFactor * fc));
+  N := ceil(4.6 / transFactor);
   if (N mod 2) = 0 then N += 1;
 
   //writeln('DoFilterCoeffs ', ifthen(HighPass, 'HP', 'LP'), ' ', FloatToStr(SampleRate * fc), ' ', N);
@@ -1052,10 +1065,12 @@ begin
   SetLength(Result, length(samples));
   for k := 0 to chunkSz - 1 do
   begin
-    sum := 0;
     s := ifthen(k = 0, sqrt(0.5), 1.0);
+
+    sum := 0;
     for n := 0 to chunkSz - 1 do
-      sum += s * samples[n] * cos(pi * (n + 0.5) * k / chunkSz);
+      sum += s * samples[n] * cos(pi / chunkSz * (n + 0.5) * k);
+
     Result[k] := sum * sqrt (2.0 / chunkSz);
   end;
 end;
@@ -1063,20 +1078,19 @@ end;
 class function TEncoder.ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
 var
   k, n: Integer;
-  sum, s: Double;
+  sum: Double;
 begin
   SetLength(Result, length(dct));
-  for n := 0 to chunkSz - 1 do
+  for k := 0 to chunkSz - 1 do
   begin
-    sum := 0;
-    for k := 0 to chunkSz - 1 do
-    begin
-      s := ifthen(k = 0, sqrt(0.5), 1.0);
-      sum += s * dct[k] * cos (pi * (n + 0.5) * k / chunkSz);
-    end;
-    Result[n] := sum * sqrt(2.0 / chunkSz);
+    sum := sqrt(0.5) * dct[0];
+    for n := 1 to chunkSz - 1 do
+      sum += dct[n] * cos (pi / chunkSz * (k + 0.5) * n);
+
+    Result[k] := sum * sqrt (2.0 / chunkSz);
   end;
 end;
+
 
 class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
 var
@@ -1104,49 +1118,21 @@ end;
 
 function TEncoder.ComputeEAQUAL(chunkSz: Integer; UseDIX, Verbz: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
 var
-  i, DupCnt: Integer;
-  FNRef, FNTst: String;
-  ms: TMemoryStream;
+  FNTmp, FNRef, FNTst: String;
 begin
-  DupCnt := Max(1, round(15 * SampleRate / chunkSz));
+  FNTmp := GetTempFileName('', 'tmp-'+IntToStr(GetCurrentThreadId))+'.wav';
+  FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId))+'.wav';
+  FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId))+'.wav';
 
-  FNRef := GetTempFileName('', 'ref-'+IntToStr(GetCurrentThreadId)+'.wav');
-  FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId)+'.wav');
+  createWAV(1, 16, SampleRate, FNTmp, smpRef);
+  DoExternalResample(FNTmp, FNRef, 48000);
 
-  ms := TMemoryStream.Create;
-  try
-    ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * SizeOf(SmallInt) * DupCnt);
-    for i := 0 to DupCnt - 1  do
-      ms.Write(smpRef[0], chunkSz * SizeOf(SmallInt));
-
-    if SampleRate < 44100 then
-    begin
-      ms.Position := $18;
-      ms.WriteDWord(44100);
-    end;
-
-    ms.SaveToFile(FNRef);
-    ms.Clear;
-
-    ms.Write(srcHeader[0], $28);
-    ms.WriteDWord(chunkSz * SizeOf(SmallInt) * DupCnt);
-    for i := 0 to DupCnt - 1  do
-      ms.Write(smpTst[0], chunkSz * SizeOf(SmallInt));
-
-    if SampleRate < 44100 then
-    begin
-      ms.Position := $18;
-      ms.WriteDWord(44100);
-    end;
-
-    ms.SaveToFile(FNTst);
-  finally
-    ms.Free;
-  end;
+  createWAV(1, 16, SampleRate, FNTmp, smpTst);
+  DoExternalResample(FNTmp, FNTst, 48000);
 
   Result := DoExternalEAQUAL(FNRef, FNTst, Verbz, UseDIX, -1);
 
+  DeleteFile(FNTst);
   DeleteFile(FNRef);
   DeleteFile(FNTst);
 end;
@@ -1169,6 +1155,35 @@ begin
 
   Result := SpearmanRankCorrelation(rr, rt, len);
 end;
+
+class procedure TEncoder.createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
+var
+  wf : TFileStream;
+  wh : TWavHeader;
+begin
+  wh.rId             := $46464952; { 'RIFF' }
+  wh.rLen            := 36 + Length(data) * SizeOf(data[0]); { length of sample + format }
+  wh.wId             := $45564157; { 'WAVE' }
+  wh.fId             := $20746d66; { 'fmt ' }
+  wh.fLen            := 16; { length of format chunk }
+  wh.wFormatTag      := 1; { PCM data }
+  wh.nChannels       := channels; { mono/stereo }
+  wh.nSamplesPerSec  := rate; { sample rate }
+  wh.nAvgBytesPerSec := channels*rate*(resolution div 8);
+  wh.nBlockAlign     := channels*(resolution div 8);
+  wh.wBitsPerSample  := resolution;{ resolution 8/16 }
+  wh.dId             := $61746164; { 'data' }
+  wh.wSampleLength   := Length(data) * SizeOf(data[0]); { sample size }
+
+  wf := TFileStream.Create(fn, fmCreate or fmShareDenyNone);
+  try
+    wf.WriteBuffer(wh, SizeOf(wh));
+    wf.WriteBuffer(data[0], Length(data) * SizeOf(data[0]));
+  finally
+    wf.Free;
+  end;
+end;
+
 
 procedure test_makeSample;
 var
@@ -1219,7 +1234,7 @@ begin
       WriteLn(#9'-v'#9'verbose mode');
       Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
-      WriteLn(#9'-cpf'#9'max. chunks par frame');
+      WriteLn(#9'-cpf'#9'max. chunks per frame');
       WriteLn(#9'-rbb'#9'enable lossy compression on bass band');
       WriteLn(#9'-cbd'#9'chunk bit depth (1-8)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
