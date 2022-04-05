@@ -5,7 +5,7 @@ program encoder;
 uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, correlation, anysort;
 
 const
-  BandCount = 4;
+  BandCount = 1;
   C1Freq = 32.703125;
 
 type
@@ -71,7 +71,6 @@ type
     destructor Destroy; override;
 
     procedure MakeChunks;
-    procedure FindBestFinalChunks;
     procedure MakeDstData;
   end;
 
@@ -113,7 +112,7 @@ type
     HighCut: Double;
     ChunkBitDepth: Integer; // 1 to 8 Bits
     ChunkSize: Integer;
-    MaxChunksPerFrame: Integer;
+    ChunksPerFrame: Integer;
     ReduceBassBand: Boolean;
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
@@ -139,6 +138,8 @@ type
     class function ComputeBitShift(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
+    class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+    class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
     class procedure createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
@@ -148,7 +149,7 @@ type
 
     procedure Load;
     procedure SaveWAV;
-    procedure SaveRSC;
+    procedure SaveGSC;
     procedure SaveStream(AStream: TStream);
     procedure SaveBandWAV(index: Integer; fn: String);
 
@@ -198,6 +199,21 @@ begin
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
 end;
 
+function lerp(x, y, alpha: TFloat): TFloat; inline;
+begin
+  Result := x + (y - x) * alpha;
+end;
+
+function ilerp(x, y, alpha, maxAlpha: Integer): Integer; inline;
+begin
+  Result := x + ((y - x) * alpha) div maxAlpha;
+end;
+
+function revlerp(x, y, alpha: TFloat): TFloat; inline;
+begin
+  Result := (alpha - x) / (y - x);
+end;
+
 { TChunk }
 
 constructor TChunk.Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
@@ -235,7 +251,7 @@ var
 begin
   SetLength(data, Length(srcData));
   for i := 0 to High(data) do
-    data[i] := srcData[i] * (1 shl dstBitShift);
+    data[i] := dstData[i] + Low(ShortInt);
   dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
@@ -300,6 +316,7 @@ begin
   scaleFactor := 0.0;
   for i := 0 to (endSample - startSample + 1) - 1 do
     scaleFactor := max(scaleFactor, abs(srcData[i]));
+  //scaleFactor := 1.0; ///////////////
 
   WriteLn('Frame #', frm.index, ' band #', idx, ' scaleFactor = ', FormatFloat('0.000', scaleFactor));
 end;
@@ -322,41 +339,10 @@ begin
   begin
     chunk := TChunk.Create(frame, i, index, globalData^.underSample, srcData);
     chunk.ComputeBitShift;
-    chunk.ComputeDCT;
     chunk.MakeDstData;
+    chunk.ComputeDCT;
     finalChunks.Add(chunk);
   end;
-end;
-
-procedure TBand.FindBestFinalChunks;
-//var
-//  i, j, prec: Integer;
-//  Clusters: TIntegerDynArray;
-//  Dataset: TReal2DArray;
-//  Yakmo: PYakmo;
-begin
-  //prec := frame.encoder.Precision;
-  //if (prec = 0) or (not frame.encoder.ReduceBassBand and (index = 0)) then
-  //  Exit;
-  //
-  //SetLength(Dataset, finalChunks.Count, frame.encoder.chunkSize);
-  //
-  //for i := 0 to finalChunks.Count - 1 do
-  //  for j := 0 to frame.encoder.chunkSize - 1 do
-  //    Dataset[i, j] := finalChunks[i].dct[j];
-  //
-  //SetLength(Clusters, finalChunks.Count);
-  //SetLength(frame.Centroids, finalChunks.Count, frame.encoder.chunkSize);
-  //
-  //Yakmo := yakmo_create(0, 1, MaxInt, 1, 0, 0, 1);
-  //yakmo_load_train_data(Yakmo, finalChunks.Count, frame.encoder.chunkSize, @Dataset[0]);
-  //yakmo_train_on_data(Yakmo, @Clusters[0]);
-  //yakmo_get_centroids(Yakmo, @frame.Centroids[0]);
-  //yakmo_destroy(Yakmo);
-  //
-  //
-  //for i := 0 to finalChunks.Count - 1 do
-  //  finalChunks[i].reducedChunk := frame.reducedChunks[Clusters[i]];
 end;
 
 procedure TBand.MakeDstData;
@@ -434,22 +420,20 @@ var
   i: Integer;
 begin
   for i := 0 to BandCount - 1 do
-  begin
-    bands[i].FindBestFinalChunks;
     bands[i].MakeDstData;
-  end;
 end;
 
 procedure TFrame.MakeChunks;
 var
-  i, j: Integer;
+  i, j, k: Integer;
 begin
   chunkRefs.Clear;
   for i := Ord(not encoder.ReduceBassBand) to BandCount - 1 do
   begin
     bands[i].MakeChunks;
     for j := 0 to bands[i].finalChunks.Count - 1 do
-      chunkRefs.Add(bands[i].finalChunks[j]);
+      //for k := 1 to bands[i].globalData^.underSample do
+        chunkRefs.Add(bands[i].finalChunks[j]);
   end;
 end;
 
@@ -471,17 +455,17 @@ begin
     for j := 0 to encoder.chunkSize - 1 do
       Dataset[i, j] := chunkRefs[i].dct[j];
 
-  if chunkRefs.Count > encoder.MaxChunksPerFrame then
+  if chunkRefs.Count > encoder.ChunksPerFrame then
   begin
     // usual chunk reduction using K-Means
 
     if encoder.Verbose then
-      WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count);
+      WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', encoder.ChunksPerFrame);
 
     SetLength(Clusters, chunkRefs.Count);
-    SetLength(Centroids,encoder.MaxChunksPerFrame, encoder.chunkSize);
+    SetLength(Centroids,encoder.ChunksPerFrame, encoder.chunkSize);
 
-    Yakmo := yakmo_create(encoder.MaxChunksPerFrame, 1, MaxInt, 1, 0, 0, 1);
+    Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, 1);
     yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
@@ -489,7 +473,7 @@ begin
 
 
     reducedChunks.Clear;
-    reducedChunks.Capacity := encoder.MaxChunksPerFrame;
+    reducedChunks.Capacity := encoder.ChunksPerFrame;
     for i := 0 to reducedChunks.Capacity - 1 do
     begin
       chunk := TChunk.Create(Self, i, -1, 1, nil);
@@ -502,8 +486,13 @@ begin
 
       SetLength(chunk.dstData, encoder.chunkSize);
       for j := 0 to encoder.chunkSize - 1 do
-        chunk.dstData[j] := TEncoder.makeOutputSample(centroid[j], encoder.ChunkBitDepth, 0);
-    end;
+      begin
+        chunk.dstData[j] := round(centroid[j]) - Low(ShortInt);;
+      end;
+  	end;
+
+    for i := 0 to chunkRefs.Count - 1 do
+      chunkRefs[i].reducedChunk := reducedChunks[Clusters[i]];
   end
   else
   begin
@@ -521,6 +510,9 @@ begin
     end;
 
     Centroids := Dataset;
+
+    for i := 0 to chunkRefs.Count - 1 do
+      chunkRefs[i].reducedChunk := reducedChunks[i];
   end;
 end;
 
@@ -565,14 +557,14 @@ begin
   end;
 end;
 
-procedure TEncoder.SaveRSC;
+procedure TEncoder.SaveGSC;
 var
   fs: TFileStream;
   cur: TMemoryStream;
   fn: String;
 begin
   fs := nil;
-  fn := ChangeFileExt(outputFN, '.rsc');
+  fn := ChangeFileExt(outputFN, '.gsc');
   cur := TMemoryStream.Create;
   fs := TFileStream.Create(fn, fmCreate);
   try
@@ -592,57 +584,45 @@ begin
 end;
 
 procedure TEncoder.SaveStream(AStream: TStream);
-//var
-//  i, j, k, l: Integer;
-//  a, b : Integer;
-//  cl: TChunkList;
+var
+  i, j, k, l: Integer;
+  w : Integer;
+  cl: TChunkList;
 begin
-  //for i := 0 to FrameCount - 1 do
-  //begin
-  //  for j := 0 to BandCount - 1 do
-  //  begin
-  //    Assert(frames[i].bands[j].chunks.Count mod (BlockSampleCount div ChunkSize) = 0);
-  //    AStream.WriteByte(frames[i].bands[j].chunks.Count div (BlockSampleCount div ChunkSize));
-  //
-  //    cl := frames[i].bands[j].reducedChunks;
-  //    if cl.Count = 0 then
-  //      cl := frames[i].bands[j].chunks;
-  //
-  //    for l := 0 to ChunkSize - 1 do
-  //      for k := 0 to cl.Count - 1 do
-  //      begin
-  //        if l < Length(cl[k].dstData) then
-  //          AStream.WriteByte(cl[k].dstData[l])
-  //        else
-  //          AStream.WriteByte($80);
-  //      end;
-  //  end;
-  //
-  //  for j := 0 to BandCount - 1 do
-  //  begin
-  //    cl := frames[i].bands[j].chunks;
-  //
-  //    for k := 0 to cl.Count - 1 do
-  //    begin
-  //      if (k and 7 = 0) and (ChunkBitDepth > 8) then
-  //      begin
-  //        b := 0;
-  //        for l := k to k + 7 do
-  //        begin
-  //          b := b shl 1;
-  //          if l < cl.Count then
-  //            b := b or (cl[l].dstBitShift shr 3);
-  //        end;
-  //        AStream.WriteByte(b);
-  //      end;
-  //
-  //      a := cl[k].reducedChunk.index;
-  //      AStream.WriteByte(a and $ff);
-  //    end;
-  //  end;
-  //end;
-  //
-  //AStream.WriteByte(0); // Termination
+  for i := 0 to FrameCount - 1 do
+  begin
+    Assert(frames[i].reducedChunks.Count <= 4096);
+    w := frames[i].reducedChunks.Count;
+    w := w or (BandCount shl 12);
+    AStream.WriteWord(w and $ffff);
+
+    cl := frames[i].reducedChunks;
+    if cl.Count = 0 then
+      cl := frames[i].chunkRefs;
+
+    for k := 0 to cl.Count - 1 do
+      for l := 0 to ChunkSize - 1 do
+      begin
+        if l < Length(cl[k].dstData) then
+          AStream.WriteByte(cl[k].dstData[l])
+        else
+          AStream.WriteByte($80);
+      end;
+
+    for j := 0 to BandCount - 1 do
+    begin
+      cl := frames[i].bands[j].finalChunks;
+
+      for k := 0 to cl.Count - 1 do
+      begin
+        w := cl[k].index;
+        w := w or (cl[k].dstBitShift shl 12);
+        AStream.WriteWord(w and $ffff);
+      end;
+    end;
+  end;
+
+  AStream.WriteWord(0); // Termination
 end;
 
 procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
@@ -720,7 +700,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 var
-  i, k, fixedCost, frameCost, nextStart, psc: Integer;
+  i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
   avgPower, totalPower, perFramePower, curPower: Double;
 begin
@@ -742,19 +722,33 @@ begin
 
   ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
 
-  frameCost := MaxChunksPerFrame * ChunkSize;
-  fixedCost := 0;
+  if Verbose then
+  begin
+    writeln('ProjectedByteSize = ', ProjectedByteSize);
+  end;
+
+  fixedCost := SizeOf(Word) {stream terminator};
+  bandCost := 0;
   for i := 0 to BandCount - 1 do
-    fixedCost += (SampleCount * (round(log2(MaxChunksPerFrame)) + round(log2(ChunkBitDepth)))) div (8 * ChunkSize * bandData[i].underSample) + SizeOf(Byte);
+    bandCost += (SampleCount * (Round(log2(4096 {ChunksPerFrame} * 8 {chunkBitDepth} * 2 {dstNegative})))) div (8 {bytes -> bits} * ChunkSize * bandData[i].underSample);
 
-  FrameCount := (ProjectedByteSize - fixedCost - 1) div frameCost + 1;
+  Inc(ChunksPerFrame);
+  repeat
+    Dec(ChunksPerFrame);
 
-  ProjectedByteSize := fixedCost + FrameCount * frameCost;
+    frameCost := ChunksPerFrame * ChunkSize + SizeOf(Word) {frame header};
+    FrameCount := (ProjectedByteSize - fixedCost - bandCost) div frameCost;
+
+    tentativeByteSize := fixedCost + bandCost + FrameCount * frameCost;
+  until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
+
+  ProjectedByteSize := tentativeByteSize;
 
   writeln('SampleRate = ', SampleRate);
   writeln('FrameCount = ', FrameCount);
+  writeln('ChunksPerFrame = ', ChunksPerFrame);
 
-  Assert(FrameCount > 0, 'Negative FrameCount! (BitRate too low)');
+  Assert(ChunksPerFrame > 0, 'Null ChunksPerFrame! (BitRate too low)');
 
   if Verbose then
   begin
@@ -770,8 +764,8 @@ begin
 
   avgPower := 0.0;
   for i := 0 to SampleCount - 1 do
-    avgPower += abs(makeFloatSample(srcData[i]));
-  avgPower /= SampleCount;
+    avgPower += Sqr(makeFloatSample(srcData[i]));
+  avgPower := Sqrt(avgPower / SampleCount);
 
   totalPower := 0.0;
   for i := 0 to SampleCount - 1 do
@@ -870,17 +864,17 @@ begin
   outputFN := OutFN;
 
   BitRate := 128;
-  Precision := 2;
+  Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
   ChunkBitDepth := 8;
-  ChunkSize := 4;
+  ChunkSize := 16;
   ReduceBassBand := False;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
 
-  MaxChunksPerFrame := 4096;
-  BandTransFactor := 0.25;
+  ChunksPerFrame := 4096;
+  BandTransFactor := 1 / 256;
 
   frames := TFrameList.Create;
 end;
@@ -931,10 +925,10 @@ begin
     begin
       for j := 0 to BandCount - 1 do
       begin
-{$if true}
-        smp := resamp[j][i];
-{$else}
+{$if false}
         smp := frames[k].bands[j].dstData[i];
+{$else}
+        smp := resamp[j][i];
 {$endif}
 
         if InRange(pos, 0, High(dstData)) then
@@ -1053,7 +1047,7 @@ begin
   for i := 0 to chunkSz - 1 do
     hiSmp := max(hiSmp, ceil(abs(samples[i] * High(SmallInt))));
   bitRgne := ceil(log2(hiSmp));
-  bitRgne := max(bitRgne, 7); // hiSmp is 0 - 32767 by design
+  bitRgne := max(bitRgne, 8); // hiSmp is 0 - 32767 by design; max 8 possible values
   Result := 15 - bitRgne;
 end;
 
@@ -1091,6 +1085,45 @@ begin
   end;
 end;
 
+// MDCT cannot be used (would need overlapped add in decoder)
+class function TEncoder.ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+var
+  k, n: Integer;
+  sum: Double;
+begin
+  SetLength(Result, length(samples));
+  for k := 0 to samplesSize div 2 - 1 do
+  begin
+    sum := 0;
+    for n := 0 to samplesSize - 1 do
+      sum += samples[n] * cos(pi / (samplesSize div 2) * (n + 0.5 + (samplesSize div 2) * 0.5) * (k + 0.5));
+
+    Result[k] := sum;
+  end;
+end;
+
+// IMDCT cannot be used (would need overlapped add in decoder)
+class function TEncoder.ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
+var
+  k, n, i: Integer;
+  sum: Double;
+begin
+  SetLength(Result, length(dct));
+  for n := 0 to dctSize - 1 do
+  begin
+    sum := 0;
+    for k := 0 to dctSize div 2 - 1 do
+      sum += dct[k] * cos (pi / (dctSize div 2) * (n + 0.5 + (dctSize div 2) * 0.5) * (k + 0.5));
+
+    Result[n] := sum / (dctSize div 2);
+  end;
+
+  for i := 0 to dctSize div 2 - 1 do
+  begin
+    Result[i] += Result[i + dctSize div 2];
+    Result[i + dctSize div 2] := 0.0;
+  end;
+end;
 
 class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
 var
@@ -1254,7 +1287,7 @@ begin
       enc.VariableFrameSizeRatio :=  EnsureRange(ParamValue('-vfr', enc.VariableFrameSizeRatio), 0.0, 1.0);
       enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 8);
       enc.ChunkSize := round(ParamValue('-cs', enc.ChunkSize));
-      enc.MaxChunksPerFrame := max(16, round(ParamValue('-cpf', enc.MaxChunksPerFrame)));
+      enc.ChunksPerFrame := EnsureRange(round(ParamValue('-cpf', enc.ChunksPerFrame)), 256, 4096);
       enc.Verbose := HasParam('-v');
       enc.ReduceBassBand := HasParam('-rbb');
 
@@ -1265,7 +1298,7 @@ begin
       if enc.Verbose then
       begin
         WriteLn('ChunkSize = ', enc.ChunkSize);
-        WriteLn('MaxChunksPerFrame = ', enc.MaxChunksPerFrame);
+        WriteLn('MaxChunksPerFrame = ', enc.ChunksPerFrame);
         WriteLn('ReduceBassBand = ', BoolToStr(enc.ReduceBassBand, True));
         WriteLn('ChunkBitDepth = ', enc.ChunkBitDepth);
         WriteLn('Precision = ', enc.Precision);
@@ -1283,7 +1316,7 @@ begin
         for i := 0 to BandCount - 1 do
           enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
       if enc.Precision > 0 then
-        enc.SaveRSC;
+        enc.SaveGSC;
 
       dix := enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
       cor := enc.ComputeCorrelation(enc.srcData, enc.dstData);
