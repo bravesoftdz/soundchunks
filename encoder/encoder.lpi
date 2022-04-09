@@ -42,7 +42,7 @@
           <CodeGeneration>
             <SmartLinkUnit Value="True"/>
             <Optimizations>
-              <OptimizationLevel Value="3"/>
+              <OptimizationLevel Value="4"/>
             </Optimizations>
           </CodeGeneration>
           <Linking>
@@ -110,13 +110,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs16 -rbb -pr0"/>
+        <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs16 -rbb -pr0 -cbd1"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs16 -rbb -pr0"/>
+            <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs16 -rbb -pr0 -cbd1"/>
           </local>
         </Mode0>
       </Modes>
@@ -159,6 +159,7 @@
       <SyntaxOptions>
         <SyntaxMode Value="Delphi"/>
         <IncludeAssertionCode Value="True"/>
+        <CPPInline Value="False"/>
       </SyntaxOptions>
     </Parsing>
     <CodeGeneration>
