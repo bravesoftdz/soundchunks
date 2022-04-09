@@ -48,7 +48,7 @@ type
 
     procedure ComputeDCT;
     procedure ComputeBitShift;
-    procedure MakeSrcData(origData: PDouble; scaleFactor: Double);
+    procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
   end;
 
@@ -139,6 +139,7 @@ type
     class function ComputeBitShift(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
+    class function ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
     class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
@@ -220,7 +221,7 @@ end;
 constructor TChunk.Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
 var
   i: Integer;
-  sclF, sum: Double;
+  sum: Double;
 begin
   index := idx;
   bandIndex := bandIdx;
@@ -234,8 +235,7 @@ begin
   if Assigned(srcDta) then
   begin
     origSrcData := @srcDta[idx * frame.encoder.chunkSize * underSample];
-    sclF := 1.0;
-    MakeSrcData(origSrcData, sclF);
+    MakeSrcData(origSrcData);
   end;
 
   // compute overall sign
@@ -259,7 +259,7 @@ begin
   SetLength(data, Length(srcData));
   for i := 0 to High(data) do
     data[i] := dstData[i];
-  dct := TEncoder.ComputeDCT(Length(data), data);
+  dct := TEncoder.ComputeDCT4(Length(data), data);
 end;
 
 procedure TChunk.ComputeBitShift;
@@ -267,7 +267,7 @@ begin
   dstBitShift := TEncoder.ComputeBitShift(frame.encoder.chunkSize, srcData);
 end;
 
-procedure TChunk.MakeSrcData(origData: PDouble; scaleFactor: Double);
+procedure TChunk.MakeSrcData(origData: PDouble);
 var
   j, k, pos, n: Integer;
   acc: Double;
@@ -289,7 +289,7 @@ begin
     if n = 0 then
       srcData[j] := 0
     else
-      srcData[j] := acc / (scaleFactor * n);
+      srcData[j] := acc / n;
   end;
 end;
 
@@ -459,7 +459,7 @@ begin
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to encoder.chunkSize - 1 do
-      Dataset[i, j] := chunkRefs[i].dstData[j];
+      Dataset[i, j] := chunkRefs[i].dct[j];
 
   if chunkRefs.Count > encoder.ChunksPerFrame then
   begin
@@ -492,7 +492,7 @@ begin
 
       centroid := Centroids[i];
 
-      //centroid := TEncoder.ComputeInvDCT(encoder.ChunkSize, centroid);
+      centroid := TEncoder.ComputeDCT4(encoder.ChunkSize, centroid);
 
       SetLength(chunk.dstData, encoder.chunkSize);
       for j := 0 to encoder.chunkSize - 1 do
@@ -1146,13 +1146,29 @@ begin
   end;
 end;
 
+class function TEncoder.ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
+var
+  k, n: Integer;
+  sum, s: Double;
+begin
+  SetLength(Result, length(samples));
+  for k := 0 to chunkSz - 1 do
+  begin
+    sum := 0;
+    for n := 0 to chunkSz - 1 do
+      sum += samples[n] * cos(pi / chunkSz * (n + 0.5) * (k + 0.5));
+
+    Result[k] := sum * sqrt (2.0 / chunkSz);
+  end;
+end;
+
 // MDCT cannot be used (would need overlapped add in decoder)
 class function TEncoder.ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
 var
   k, n: Integer;
   sum: Double;
 begin
-  SetLength(Result, length(samples));
+  SetLength(Result, length(samples) div 2);
   for k := 0 to samplesSize div 2 - 1 do
   begin
     sum := 0;
