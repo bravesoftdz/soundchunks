@@ -55,6 +55,7 @@ type
 
   TYakmoCallback = procedure(cbData: Pointer); stdcall;
 
+procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean; var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
 procedure DoExternalResample(AFNIn, AFNOut: String; SampleRate: Integer);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
@@ -235,18 +236,19 @@ begin
   DeleteFile(PChar(DstFN));
 end;
 
-procedure DoExternalSKLearn(Dataset: TFloatDynArray2; ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean;
-  var Clusters: TIntegerDynArray);
+procedure DoExternalSKLearn(Dataset: TDoubleDynArray2; ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean;
+  var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
 var
   i, j, st: Integer;
   InFN, Line, Output, ErrOut: String;
-  SL, Shuffler: TStringList;
+  SL, Shuffler, LineParser: TStringList;
   Process: TProcess;
   OutputStream: TMemoryStream;
   pythonExe: array[0..MAX_PATH-1] of Char;
 begin
   SL := TStringList.Create;
   Shuffler := TStringList.Create;
+  LineParser := TStringList.Create;
   OutputStream := TMemoryStream.Create;
   try
     for i := 0 to High(Dataset) do
@@ -294,16 +296,28 @@ begin
 
     SL.LoadFromFile(InFN + '.membership');
 
-    DeleteFile(PChar(InFN));
-    DeleteFile(PChar(InFN + '.membership'));
-    DeleteFile(PChar(InFN + '.cluster_centres'));
-
     SetLength(Clusters, SL.Count);
     for i := 0 to SL.Count - 1 do
     begin
       Line := SL[i];
       Clusters[i] := StrToIntDef(Line, -1);
     end;
+
+    SL.LoadFromFile(InFN + '.cluster_centres');
+
+    LineParser.Delimiter := ' ';
+    SetLength(Centroids, SL.Count, Length(Dataset[0]));
+    for j := 0 to SL.Count - 1 do
+    begin
+      LineParser.DelimitedText := SL[j];
+      for i := 0 to LineParser.Count - 1 do
+        Centroids[j, i] := StrToFloatDef(LineParser[i], 0.0, InvariantFormatSettings);
+    end;
+
+    DeleteFile(PChar(InFN));
+    DeleteFile(PChar(InFN + '.membership'));
+    DeleteFile(PChar(InFN + '.cluster_centres'));
+
   finally
     OutputStream.Free;
     Shuffler.Free;

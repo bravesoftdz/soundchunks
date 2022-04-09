@@ -86,7 +86,6 @@ type
     FrameSize: Integer;
 
     chunkRefs, reducedChunks: TChunkList;
-    Centroids: TReal2DArray;
 
     bands: array[0..BandCount - 1] of TBand;
 
@@ -405,14 +404,12 @@ begin
 
   chunkRefs := TChunkList.Create(False);
   reducedChunks := TChunkList.Create;
-  Centroids := nil;
 end;
 
 destructor TFrame.Destroy;
 var
   i: Integer;
 begin
-  Centroids := nil;
   reducedChunks.Free;
   chunkRefs.Free;
 
@@ -446,13 +443,14 @@ end;
 
 procedure TFrame.KMeansReduce;
 var
-  i, j, k, prec, best, bestV: Integer;
+  i, j, k, prec, meanCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
-  Dataset: TReal2DArray;
+  Dataset: TDoubleDynArray2;
+  Centroids: TDoubleDynArray2;
   Yakmo: PYakmo;
-  Median: TInteger2DArray;
+  Mean: TIntegerDynArray;
 begin
   prec := encoder.Precision;
   if prec = 0 then Exit;
@@ -461,7 +459,7 @@ begin
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to encoder.chunkSize - 1 do
-      Dataset[i, j] := chunkRefs[i].dct[j];
+      Dataset[i, j] := chunkRefs[i].dstData[j];
 
   if chunkRefs.Count > encoder.ChunksPerFrame then
   begin
@@ -473,11 +471,15 @@ begin
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids,encoder.ChunksPerFrame, encoder.chunkSize);
 
+{$if true}
     Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, 0);
     yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
     yakmo_destroy(Yakmo);
+{$else}
+    DoExternalSKLearn(Dataset, encoder.ChunksPerFrame, prec, False, True, Clusters, Centroids);
+{$ifend}
 
 {$if true}
     reducedChunks.Clear;
@@ -490,44 +492,35 @@ begin
 
       centroid := Centroids[i];
 
-      centroid := TEncoder.ComputeInvDCT(encoder.ChunkSize, centroid);
+      //centroid := TEncoder.ComputeInvDCT(encoder.ChunkSize, centroid);
 
       SetLength(chunk.dstData, encoder.chunkSize);
       for j := 0 to encoder.chunkSize - 1 do
-        chunk.dstData[j] := EnsureRange(Trunc(centroid[j]), Low(ShortInt), High(ShortInt));
+        chunk.dstData[j] := EnsureRange(round(centroid[j]), Low(ShortInt), High(ShortInt));
   	end;
 {$else}
     reducedChunks.Clear;
     reducedChunks.Capacity := encoder.ChunksPerFrame;
-    SetLength(Median, encoder.ChunkSize, High(Byte));
+    SetLength(Mean, encoder.ChunkSize);
     for i := 0 to encoder.ChunksPerFrame - 1 do
     begin
       chunk := TChunk.Create(Self, i, -1, 1, nil);
       reducedChunks.Add(chunk);
       SetLength(chunk.dstData, encoder.chunkSize);
 
-      for j := 0 to encoder.ChunkSize - 1 do
-        FillDWord(Median[j, 0], High(Byte), 0);
+      meanCount := 0;
+      FillDWord(Mean[0], encoder.ChunkSize, 0);
 
       for j := 0 to chunkRefs.Count - 1 do
         if Clusters[j] = i then
+        begin
           for k := 0 to encoder.ChunkSize - 1 do
-            Inc(Median[k, chunkRefs[j].dstData[k] - Low(ShortInt)]);
+            Mean[k] += chunkRefs[j].dstData[k];
+          Inc(meanCount);
+        end;
 
       for j := 0 to encoder.ChunkSize - 1 do
-      begin
-        best := -1;
-        bestV := -1;
-        for k := 0 to High(Byte) do
-          if Median[j, k] >= best then
-          begin
-            best := Median[j, k];
-            bestV := k + Low(ShortInt);
-          end;
-
-        writeln(best:8,bestV:8,j:8,i:8);
-        chunk.dstData[j] := bestV;
-      end;
+        chunk.dstData[j] := Mean[j] div meanCount;
     end;
 {$ifend}
 
@@ -776,7 +769,7 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount * ChannelCount / SampleRate) * BitRate * (1024 / 8));
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
 
   if Verbose then
   begin
@@ -933,8 +926,8 @@ begin
   LowCut := 0.0;
   HighCut := 24000.0;
   ChunkBitDepth := 8;
-  ChunkSize := 16;
-  ReduceBassBand := False;
+  ChunkSize := 8;
+  ReduceBassBand := True;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
 
@@ -1113,7 +1106,7 @@ begin
   hiSmp := 0;
   for i := 0 to chunkSz - 1 do
     hiSmp := max(hiSmp, ceil(abs(samples[i] * High(SmallInt))));
-  bitRgne := ceil(log2(1 + hiSmp));
+  bitRgne := ceil(log2(max(1, hiSmp)));
   bitRgne := max(bitRgne, 8);
   Result := 15 - bitRgne;
   Assert(InRange(Result, 0, 7));
