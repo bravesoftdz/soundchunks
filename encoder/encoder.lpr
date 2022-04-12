@@ -94,7 +94,7 @@ type
 
     procedure MakeChunks;
     procedure KMeansReduce;
-    procedure MakeDstData;
+    procedure SaveStream(AStream: TStream);
   end;
 
   TFrameList = specialize TFPGObjectList<TFrame>;
@@ -110,7 +110,7 @@ type
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
-    ChunkBitDepth: Integer; // 1 to 16 Bits
+    ChunkBitDepth: Integer; // 8 or 12 Bits
     ChunkSize: Integer;
     ChunksPerFrame: Integer;
     ReduceBassBand: Boolean;
@@ -419,14 +419,6 @@ begin
   inherited Destroy;
 end;
 
-procedure TFrame.MakeDstData;
-var
-  i: Integer;
-begin
-  for i := 0 to BandCount - 1 do
-    bands[i].MakeDstData;
-end;
-
 procedure TFrame.MakeChunks;
 var
   i, j, k: Integer;
@@ -441,6 +433,18 @@ begin
   end;
 end;
 
+type
+  TCountIndex = class
+    Index, Count: Integer;
+  end;
+
+  TCountIndexList = specialize TFPGObjectList<TCountIndex>;
+
+function CompareCountIndex (const Item1, Item2: TCountIndex): Integer;
+begin
+  Result := CompareValue(Item1.Count, Item2.Count);
+end;
+
 procedure TFrame.KMeansReduce;
 var
   i, j, prec: Integer;
@@ -450,6 +454,8 @@ var
   Dataset: TDoubleDynArray2;
   Centroids: TDoubleDynArray2;
   Yakmo: PYakmo;
+  CIList: TCountIndexList;
+  CIInv: TIntegerDynArray;
 begin
   prec := encoder.Precision;
   if prec = 0 then Exit;
@@ -476,25 +482,45 @@ begin
     yakmo_get_centroids(Yakmo, @Centroids[0]);
     yakmo_destroy(Yakmo);
 
-    reducedChunks.Clear;
-    reducedChunks.Capacity := encoder.ChunksPerFrame;
-    for i := 0 to reducedChunks.Capacity - 1 do
-    begin
-      chunk := TChunk.Create(Self, i, -1, 1, nil);
 
-      reducedChunks.Add(chunk);
+    CIList := TCountIndexList.Create;
+    try
+      for i := 0 to encoder.ChunksPerFrame - 1 do
+      begin
+        CIList.Add(TCountIndex.Create);
+        CIList[i].Index := i;
 
-      centroid := Centroids[i];
+        for j := 0 to High(Clusters) do
+          if Clusters[j] = i then
+            Inc(CIList[i].Count);
+      end;
+      CIList.Sort(@CompareCountIndex);
+      SetLength(CIInv, encoder.ChunksPerFrame);
 
-      centroid := TEncoder.ComputeDCT4(encoder.ChunkSize, centroid);
+      reducedChunks.Clear;
+      reducedChunks.Capacity := encoder.ChunksPerFrame;
+      for i := 0 to reducedChunks.Capacity - 1 do
+      begin
+        chunk := TChunk.Create(Self, i, -1, 1, nil);
 
-      SetLength(chunk.dstData, encoder.chunkSize);
-      for j := 0 to encoder.chunkSize - 1 do
-        chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth), (1 shl encoder.ChunkBitDepth) - 1);
-  	end;
+        reducedChunks.Add(chunk);
 
-    for i := 0 to chunkRefs.Count - 1 do
-      chunkRefs[i].reducedChunk := reducedChunks[Clusters[i]];
+        centroid := Centroids[CIList[i].Index];
+        CIInv[CIList[i].Index] := i;
+
+        centroid := TEncoder.ComputeDCT4(encoder.ChunkSize, centroid);
+
+        SetLength(chunk.dstData, encoder.chunkSize);
+        for j := 0 to encoder.chunkSize - 1 do
+          chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth), (1 shl encoder.ChunkBitDepth) - 1);
+  	  end;
+
+      for i := 0 to chunkRefs.Count - 1 do
+        chunkRefs[i].reducedChunk := reducedChunks[CIInv[Clusters[i]]];
+
+    finally
+      CIList.Free;
+    end;
   end
   else
   begin
@@ -515,6 +541,52 @@ begin
 
     for i := 0 to chunkRefs.Count - 1 do
       chunkRefs[i].reducedChunk := reducedChunks[i];
+  end;
+end;
+
+procedure TFrame.SaveStream(AStream: TStream);
+var
+  j, k, l: Integer;
+  w : Integer;
+  cl: TChunkList;
+begin
+  Assert(reducedChunks.Count <= MaxChunksPerFrame);
+  w := reducedChunks.Count;
+  w := w or (BandCount shl 13);
+  AStream.WriteWord(w and $ffff);
+
+  cl := reducedChunks;
+  if cl.Count = 0 then
+    cl := chunkRefs;
+
+  case encoder.ChunkBitDepth of
+    8:
+      for k := 0 to cl.Count - 1 do
+        for l := 0 to encoder.ChunkSize - 1 do
+          AStream.WriteByte((cl[k].dstData[l] - Low(ShortInt)) and $ff);
+    12:
+      for k := 0 to cl.Count - 1 do
+        for l := 0 to encoder.ChunkSize div 2 - 1 do
+        begin
+          AStream.WriteByte(((cl[k].dstData[l * 2] shr 8) shl 4) or (cl[k].dstData[l * 2 + 1] shr 8));
+          AStream.WriteByte(cl[k].dstData[l * 2] and $ff);
+          AStream.WriteByte(cl[k].dstData[l * 2 + 1] and $ff);
+        end;
+    else
+      Assert(False, 'ChunkBitDepth not supported');
+  end;
+
+  for j := 0 to BandCount - 1 do
+  begin
+    cl := bands[j].finalChunks;
+
+    for k := 0 to cl.Count - 1 do
+    begin
+      w := cl[k].index;
+      w := w or (cl[k].dstAttenuation shl 12);
+      w := w or IfThen(cl[k].dstNegative, $8000);
+      AStream.WriteWord(w and $ffff);
+    end;
   end;
 end;
 
@@ -596,44 +668,18 @@ end;
 
 procedure TEncoder.SaveStream(AStream: TStream);
 var
-  i, j, k, l: Integer;
-  w : Integer;
-  cl: TChunkList;
+  i: Integer;
+  ZStream: TMemoryStream;
 begin
-  for i := 0 to FrameCount - 1 do
-  begin
-    Assert(frames[i].reducedChunks.Count <= MaxChunksPerFrame);
-    w := frames[i].reducedChunks.Count;
-    w := w or (BandCount shl 13);
-    AStream.WriteWord(w and $ffff);
+  ZStream := TMemoryStream.Create;
+  try
+    for i := 0 to FrameCount - 1 do
+      frames[i].SaveStream(ZStream);
 
-    cl := frames[i].reducedChunks;
-    if cl.Count = 0 then
-      cl := frames[i].chunkRefs;
-
-    for k := 0 to cl.Count - 1 do
-      for l := 0 to ChunkSize div 2 - 1 do
-      begin
-        AStream.WriteByte(((cl[k].dstData[l * 2] shr 8) shl 4) or (cl[k].dstData[l * 2 + 1] shr 8));
-        AStream.WriteByte(cl[k].dstData[l * 2] and $ff);
-        AStream.WriteByte(cl[k].dstData[l * 2 + 1] and $ff);
-      end;
-
-    for j := 0 to BandCount - 1 do
-    begin
-      cl := frames[i].bands[j].finalChunks;
-
-      for k := 0 to cl.Count - 1 do
-      begin
-        w := cl[k].index;
-        w := w or (cl[k].dstAttenuation shl 12);
-        w := w or IfThen(cl[k].dstNegative, $8000);
-        AStream.WriteWord(w and $ffff);
-      end;
-    end;
+    LZCompress(ZStream, False, AStream);
+  finally
+    ZStream.Free;
   end;
-
-  AStream.WriteWord(0); // Termination
 end;
 
 procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
@@ -715,6 +761,8 @@ procedure TEncoder.PrepareFrames;
     MakeBandSrcData(AIndex);
   end;
 
+const
+  CLZRatio = 0.5;
 var
   j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -737,7 +785,7 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate * (1024 / 8));
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate / CLZRatio * (1024 / 8));
 
   if Verbose then
   begin
@@ -836,6 +884,7 @@ procedure TEncoder.MakeFrames;
 
   procedure DoFrame(AIndex: PtrInt; AData: Pointer; AItem: TMultiThreadProcItem);
   var
+    i: Integer;
     frm: TFrame;
   begin
     frm := frames[AIndex];
@@ -843,7 +892,8 @@ procedure TEncoder.MakeFrames;
     frm.MakeChunks;
     frm.KMeansReduce;
     //frm.SortAndReindexReducedChunks; //TODO: maybe useful for better LZ compression
-    frm.MakeDstData;
+    for i := 0 to BandCount - 1 do
+      frm.bands[i].MakeDstData;
     Write('.');
   end;
 begin
@@ -893,8 +943,8 @@ begin
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
-  ChunkBitDepth := 12;
-  ChunkSize := 8;
+  ChunkBitDepth := 8;
+  ChunkSize := 6;
   ReduceBassBand := True;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
