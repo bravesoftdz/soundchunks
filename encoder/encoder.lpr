@@ -832,7 +832,7 @@ begin
   for j := 0 to ChannelCount - 1 do
     for i := 0 to SampleCount - 1 do
       avgPower += abs(makeFloatSample(srcData[j, i]));
-  avgPower := avgPower / SampleCount;
+  avgPower := avgPower / (SampleCount * ChannelCount);
 
   totalPower := 0.0;
   for i := 0 to SampleCount - 1 do
@@ -845,7 +845,6 @@ begin
     totalPower += avgPower - avgPower * VariableFrameSizeRatio + VariableFrameSizeRatio * smp;
   end;
 
-  totalPower /= ChannelCount;
   perFramePower := totalPower / FrameCount;
 
   if Verbose then
