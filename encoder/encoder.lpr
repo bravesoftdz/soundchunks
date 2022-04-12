@@ -41,13 +41,13 @@ type
     origSrcData: PDouble;
     srcData: TDoubleDynArray;
     dct: TDoubleDynArray;
-    dstData: TShortIntDynArray;
+    dstData: TSmallIntDynArray;
 
     constructor Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
     destructor Destroy; override;
 
     procedure ComputeDCT;
-    procedure ComputeBitShift;
+    procedure ComputeAttenuation;
     procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
   end;
@@ -110,7 +110,7 @@ type
     BandTransFactor: Double;
     LowCut: Double;
     HighCut: Double;
-    ChunkBitDepth: Integer; // 1 to 8 Bits
+    ChunkBitDepth: Integer; // 1 to 16 Bits
     ChunkSize: Integer;
     ChunksPerFrame: Integer;
     ReduceBassBand: Boolean;
@@ -133,9 +133,9 @@ type
     bandData: array[0 .. BandCount - 1] of TBandGlobalData;
 
     class function make16BitSample(smp: Double): SmallInt;
-    class function makeOutputSample(smp: Double; OutBitDepth, BitShift: Integer; Negative: Boolean): ShortInt;
+    class function makeOutputSample(smp: Double; OutBitDepth, Attenuation: Integer; Negative: Boolean): SmallInt;
     class function makeFloatSample(smp: SmallInt): Double; overload;
-    class function makeFloatSample(smp: ShortInt; OutBitDepth, BitShift: Integer; Negative: Boolean): Double; overload;
+    class function makeFloatSample(smp: SmallInt; OutBitDepth, Attenuation: Integer; Negative: Boolean): Double; overload;
     class function ComputeAttenuation(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
     class function ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvDCT(chunkSz: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
@@ -262,7 +262,7 @@ begin
   dct := TEncoder.ComputeDCT4(Length(data), data);
 end;
 
-procedure TChunk.ComputeBitShift;
+procedure TChunk.ComputeAttenuation;
 begin
   dstAttenuation := TEncoder.ComputeAttenuation(frame.encoder.chunkSize, srcData);
 end;
@@ -341,7 +341,7 @@ begin
     begin
       chunk := TChunk.Create(frame, i, index, globalData^.underSample, srcData[j]);
       chunk.channel := j;
-      chunk.ComputeBitShift;
+      chunk.ComputeAttenuation;
       chunk.MakeDstData;
       chunk.ComputeDCT;
       finalChunks.Add(chunk);
@@ -490,7 +490,7 @@ begin
 
       SetLength(chunk.dstData, encoder.chunkSize);
       for j := 0 to encoder.chunkSize - 1 do
-        chunk.dstData[j] := EnsureRange(round(centroid[j]), Low(ShortInt), High(ShortInt));
+        chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth), (1 shl encoder.ChunkBitDepth) - 1);
   	end;
 
     for i := 0 to chunkRefs.Count - 1 do
@@ -612,12 +612,11 @@ begin
       cl := frames[i].chunkRefs;
 
     for k := 0 to cl.Count - 1 do
-      for l := 0 to ChunkSize - 1 do
+      for l := 0 to ChunkSize div 2 - 1 do
       begin
-        if l < Length(cl[k].dstData) then
-          AStream.WriteByte(cl[k].dstData[l] - Low(ShortInt))
-        else
-          AStream.WriteByte($80);
+        AStream.WriteByte(((cl[k].dstData[l * 2] shr 8) shl 4) or (cl[k].dstData[l * 2 + 1] shr 8));
+        AStream.WriteByte(cl[k].dstData[l * 2] and $ff);
+        AStream.WriteByte(cl[k].dstData[l * 2 + 1] and $ff);
       end;
 
     for j := 0 to BandCount - 1 do
@@ -748,13 +747,13 @@ begin
   fixedCost := SizeOf(Word) {stream terminator};
   bandCost := 0;
   for i := 0 to BandCount - 1 do
-    bandCost += (SampleCount * ChannelCount * (Round(log2(MaxChunksPerFrame {MaxChunksPerFrame} * 2 {dstNegative})))) div (8 {bytes -> bits} * ChunkSize * bandData[i].underSample);
+    bandCost += (SampleCount * ChannelCount * (Round(log2(MaxChunksPerFrame {MaxChunksPerFrame} * 8 {dstAttenuation} * 2 {dstNegative})))) div (8 {bytes -> bits} * ChunkSize * bandData[i].underSample);
 
   Inc(ChunksPerFrame);
   repeat
     Dec(ChunksPerFrame);
 
-    frameCost := ChunksPerFrame * ChunkSize + SizeOf(Word) {frame header};
+    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + SizeOf(Word) {frame header};
     FrameCount := (ProjectedByteSize - fixedCost - bandCost) div frameCost;
 
     tentativeByteSize := fixedCost + bandCost + FrameCount * frameCost;
@@ -894,7 +893,7 @@ begin
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
-  ChunkBitDepth := 8;
+  ChunkBitDepth := 12;
   ChunkSize := 8;
   ReduceBassBand := True;
   TrebleBoost := False;
@@ -1043,24 +1042,24 @@ begin
   Result := smp / High(SmallInt);
 end;
 
-class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, BitShift: Integer; Negative: Boolean): ShortInt;
+class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, Attenuation: Integer; Negative: Boolean): SmallInt;
 var
   obd: Integer;
   smp16: SmallInt;
 begin
-  obd := (1 shl (OutBitDepth - 1)) * (1 + BitShift);
-  smp16 := round(smp * obd);
+  obd := (1 shl (OutBitDepth - 1));
+  smp16 := round(smp * obd * (1 + Attenuation));
   if Negative then smp16 := -smp16;
-  smp16 := EnsureRange(smp16, Low(ShortInt), High(ShortInt));
+  smp16 := EnsureRange(smp16, -obd, obd - 1);
   Result := smp16;
 end;
 
-class function TEncoder.makeFloatSample(smp: ShortInt; OutBitDepth, BitShift: Integer; Negative: Boolean): Double;
+class function TEncoder.makeFloatSample(smp: SmallInt; OutBitDepth, Attenuation: Integer; Negative: Boolean): Double;
 var
   obd: Integer;
   smp16: SmallInt;
 begin
-  obd := (1 shl (OutBitDepth - 1)) * (1 + BitShift);
+  obd := (1 shl (OutBitDepth - 1)) * (1 + Attenuation);
   smp16 := smp;
   if Negative then smp16 := -smp16;
   Result := smp16 / obd;
@@ -1119,7 +1118,7 @@ end;
 class function TEncoder.ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
 var
   k, n: Integer;
-  sum, s: Double;
+  sum: Double;
 begin
   SetLength(Result, length(samples));
   for k := 0 to chunkSz - 1 do
@@ -1272,8 +1271,8 @@ end;
 procedure test_makeSample;
 var
   i: Integer;
-  smp, o, so: ShortInt;
-  obd, bs: byte;
+  smp, o, so: SmallInt;
+  obd, bs: SmallInt;
   sgn: Boolean;
   f, sf: Double;
 begin
@@ -1281,10 +1280,10 @@ begin
   begin
     bs := RandomRange(0, 7);
     sgn := Random >= 0.5;
-    obd := 8;//RandomRange(1, 8);
+    obd := 12;//RandomRange(1, 8);
 
-    smp := (i mod 256) + Low(ShortInt);
-    sf := smp / -Low(ShortInt) / (1 * (1 + bs)) * IfThen(sgn, -1, 1);
+    smp := (i mod (1 shl obd)) - (1 shl (obd - 1));
+    sf := smp / (1 shl (obd - 1)) / (1 * (1 + bs)) * IfThen(sgn, -1, 1);
 
     f := TEncoder.makeFloatSample(smp, obd, bs, sgn);
     o := TEncoder.makeOutputSample(f, obd, bs, sgn);
@@ -1344,7 +1343,7 @@ begin
       enc.LowCut := ParamValue('-lc', enc.LowCut);
       enc.HighCut := ParamValue('-hc', enc.HighCut);
       enc.VariableFrameSizeRatio :=  EnsureRange(ParamValue('-vfr', enc.VariableFrameSizeRatio), 0.0, 1.0);
-      enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 8);
+      enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 16);
       enc.ChunkSize := round(ParamValue('-cs', enc.ChunkSize));
       enc.ChunksPerFrame := EnsureRange(round(ParamValue('-cpf', enc.ChunksPerFrame)), 256, MaxChunksPerFrame);
       enc.Verbose := HasParam('-v');
