@@ -855,10 +855,10 @@ begin
   begin
     smp := 0.0;
     for j := 0 to ChannelCount - 1 do
-      smp += makeFloatSample(srcData[j, i]);
+      smp += abs(makeFloatSample(srcData[j, i]));
     smp /= ChannelCount;
 
-    curPower += avgPower - avgPower * VariableFrameSizeRatio + abs(VariableFrameSizeRatio * smp);
+    curPower += avgPower - avgPower * VariableFrameSizeRatio + VariableFrameSizeRatio * smp;
 
     if (i mod BlockSampleCount = 0) and (curPower >= perFramePower) then
     begin
@@ -939,12 +939,12 @@ begin
   inputFN := InFN;
   outputFN := OutFN;
 
-  BitRate := 128;
+  BitRate := 192;
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
-  ChunkBitDepth := 8;
-  ChunkSize := 6;
+  ChunkBitDepth := 12;
+  ChunkSize := 4;
   ReduceBassBand := True;
   TrebleBoost := False;
   VariableFrameSizeRatio := 0.0;
