@@ -831,13 +831,19 @@ begin
   avgPower := 0.0;
   for j := 0 to ChannelCount - 1 do
     for i := 0 to SampleCount - 1 do
-      avgPower += Sqr(makeFloatSample(srcData[j, i]));
-  avgPower := Sqrt(avgPower / SampleCount);
+      avgPower += abs(makeFloatSample(srcData[j, i]));
+  avgPower := avgPower / SampleCount;
 
   totalPower := 0.0;
-  for j := 0 to ChannelCount - 1 do
-    for i := 0 to SampleCount - 1 do
-      totalPower += avgPower - avgPower * VariableFrameSizeRatio + abs(VariableFrameSizeRatio * makeFloatSample(srcData[j, i]));
+  for i := 0 to SampleCount - 1 do
+  begin
+    smp := 0.0;
+    for j := 0 to ChannelCount - 1 do
+      smp += abs(makeFloatSample(srcData[j, i]));
+    smp /= ChannelCount;
+
+    totalPower += avgPower - avgPower * VariableFrameSizeRatio + VariableFrameSizeRatio * smp;
+  end;
 
   totalPower /= ChannelCount;
   perFramePower := totalPower / FrameCount;
@@ -1230,7 +1236,7 @@ begin
   for i := firstCoeff to lastCoeff do
     Result += sqr(dctA[i] - dctB[i]);
 
-  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
+  Result := sqrt(Result) / (lastCoeff - firstCoeff + 1);
 end;
 
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
