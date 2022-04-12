@@ -142,7 +142,7 @@ type
     class function ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
-    class function CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
     class procedure createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
 
@@ -443,14 +443,13 @@ end;
 
 procedure TFrame.KMeansReduce;
 var
-  i, j, k, prec, meanCount: Integer;
+  i, j, prec: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
   Dataset: TDoubleDynArray2;
   Centroids: TDoubleDynArray2;
   Yakmo: PYakmo;
-  Mean: TIntegerDynArray;
 begin
   prec := encoder.Precision;
   if prec = 0 then Exit;
@@ -471,17 +470,12 @@ begin
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids,encoder.ChunksPerFrame, encoder.chunkSize);
 
-{$if true}
     Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, 0);
     yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
     yakmo_destroy(Yakmo);
-{$else}
-    DoExternalSKLearn(Dataset, encoder.ChunksPerFrame, prec, False, True, Clusters, Centroids);
-{$ifend}
 
-{$if true}
     reducedChunks.Clear;
     reducedChunks.Capacity := encoder.ChunksPerFrame;
     for i := 0 to reducedChunks.Capacity - 1 do
@@ -498,31 +492,6 @@ begin
       for j := 0 to encoder.chunkSize - 1 do
         chunk.dstData[j] := EnsureRange(round(centroid[j]), Low(ShortInt), High(ShortInt));
   	end;
-{$else}
-    reducedChunks.Clear;
-    reducedChunks.Capacity := encoder.ChunksPerFrame;
-    SetLength(Mean, encoder.ChunkSize);
-    for i := 0 to encoder.ChunksPerFrame - 1 do
-    begin
-      chunk := TChunk.Create(Self, i, -1, 1, nil);
-      reducedChunks.Add(chunk);
-      SetLength(chunk.dstData, encoder.chunkSize);
-
-      meanCount := 0;
-      FillDWord(Mean[0], encoder.ChunkSize, 0);
-
-      for j := 0 to chunkRefs.Count - 1 do
-        if Clusters[j] = i then
-        begin
-          for k := 0 to encoder.ChunkSize - 1 do
-            Mean[k] += chunkRefs[j].dstData[k];
-          Inc(meanCount);
-        end;
-
-      for j := 0 to encoder.ChunkSize - 1 do
-        chunk.dstData[j] := Mean[j] div meanCount;
-    end;
-{$ifend}
 
     for i := 0 to chunkRefs.Count - 1 do
       chunkRefs[i].reducedChunk := reducedChunks[Clusters[i]];
@@ -1202,7 +1171,7 @@ begin
   end;
 end;
 
-class function TEncoder.CompareDCT(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
 var
   i: Integer;
 begin
@@ -1211,7 +1180,7 @@ begin
   for i := firstCoeff to lastCoeff do
     Result += sqr(dctA[i] - dctB[i]);
 
-  Result := sqrt(Result);
+  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
 end;
 
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
@@ -1260,14 +1229,14 @@ begin
   for j := 0 to High(smpRef) do
     for i := 0 to High(smpRef[0]) do
     begin
-      rr[j * Length(smpRef) + i] := makeFloatSample(smpRef[j, i]);
-      rt[j * Length(smpRef) + i] := makeFloatSample(smpTst[j, i]);
+      rr[j * Length(smpRef) + i] := smpRef[j, i];
+      rt[j * Length(smpRef) + i] := smpTst[j, i];
     end;
 
   //rr := ComputeDCT(len, rr);
   //rt := ComputeDCT(len, rt);
 
-  Result := CompareDCT(0, len - 1, rr, rt);
+  Result := CompareEuclidean(0, len - 1, rr, rt);
 end;
 
 class procedure TEncoder.createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
@@ -1302,23 +1271,29 @@ end;
 procedure test_makeSample;
 var
   i: Integer;
-  smp, o: ShortInt;
+  smp, o, so: ShortInt;
   obd, bs: byte;
   sgn: Boolean;
-  f: Double;
+  f, sf: Double;
 begin
-  for i := 0 to 255 do
+  for i := 0 to 65535 do
   begin
-    smp := (i mod 256) + Low(ShortInt);
+    bs := RandomRange(0, 7);
+    sgn := Random >= 0.5;
     obd := 8;//RandomRange(1, 8);
-    bs := 0;//RandomRange(0, 7);
-    sgn := False;//RandomRange(0, 8);
+
+    smp := (i mod 256) + Low(ShortInt);
+    sf := smp / -Low(ShortInt) / (1 shl bs) * IfThen(sgn, -1, 1);
 
     f := TEncoder.makeFloatSample(smp, obd, bs, sgn);
     o := TEncoder.makeOutputSample(f, obd, bs, sgn);
-    writeln(smp,#9,o,#9,obd,#9,sgn,#9,FloatToStr(f));
+    so := TEncoder.makeOutputSample(sf, obd, bs, sgn);
+    writeln(smp,#9,o,#9,so,#9,bs,#9,sgn,#9,FloatToStr(f));
     assert(smp = o);
+    assert(smp = so);
   end;
+
+  halt;
 end;
 
 var
