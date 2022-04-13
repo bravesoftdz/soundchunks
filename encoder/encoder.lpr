@@ -512,7 +512,7 @@ begin
 
         SetLength(chunk.dstData, encoder.chunkSize);
         for j := 0 to encoder.chunkSize - 1 do
-          chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth), (1 shl encoder.ChunkBitDepth) - 1);
+          chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth) + 1, (1 shl encoder.ChunkBitDepth) - 1);
   	  end;
 
       for i := 0 to chunkRefs.Count - 1 do
@@ -596,6 +596,7 @@ procedure TEncoder.Load;
 var
   fs: TFileStream;
   i, j: Integer;
+  data: TSmallIntDynArray;
 begin
   WriteLn('Load ', inputFN);
   fs := TFileStream.Create(inputFN, fmOpenRead or fmShareDenyNone);
@@ -607,12 +608,12 @@ begin
     SampleCount := (fs.Size - fs.Position) div (SizeOf(SmallInt) * ChannelCount);
     SetLength(srcData, ChannelCount, SampleCount);
 
-    for i := 0 to ChannelCount - 1 do
-      FillWord(srcData[i, 0], SampleCount, 0);
+    SetLength(data, SampleCount * ChannelCount);
+    fs.ReadBuffer(data[0], SampleCount * ChannelCount * 2);
 
     for i := 0 to SampleCount - 1 do
       for j := 0 to ChannelCount - 1 do
-        srcData[j, i] := SmallInt(fs.ReadWord);
+        srcData[j, i] := data[i * ChannelCount + j];
   finally
     fs.Free;
   end;
@@ -623,6 +624,7 @@ var
   i, j: Integer;
   fs: TFileStream;
   wavFN: String;
+  data: TSmallIntDynArray;
 begin
   wavFN := ChangeFileExt(outputFN, '.wav');
 
@@ -632,9 +634,13 @@ begin
   try
     fs.WriteBuffer(srcHeader[0], SizeOf(srcHeader));
 
+    SetLength(data, SampleCount * ChannelCount);
+
     for i := 0 to SampleCount - 1 do
       for j := 0 to ChannelCount - 1 do
-        fs.WriteWord(Word(dstData[j, i]));
+        data[i * ChannelCount + j] := dstData[j, i];
+
+    fs.WriteBuffer(data[0], SampleCount * ChannelCount * 2);
   finally
     fs.Free;
   end;
@@ -649,7 +655,7 @@ begin
   fs := nil;
   fn := ChangeFileExt(outputFN, '.gsc');
   cur := TMemoryStream.Create;
-  fs := TFileStream.Create(fn, fmCreate);
+  fs := TFileStream.Create(fn, fmCreate or fmShareDenyWrite);
   try
     WriteLn('Save ', fn);
 
@@ -686,6 +692,7 @@ procedure TEncoder.SaveBandWAV(index: Integer; fn: String);
 var
   i, j: Integer;
   fs: TFileStream;
+  data: TSmallIntDynArray;
 begin
   //WriteLn('SaveBandWAV #', index, ' ', fn);
 
@@ -693,9 +700,13 @@ begin
   try
     fs.WriteBuffer(srcHeader[0], SizeOf(srcHeader));
 
+    SetLength(data, SampleCount * ChannelCount);
+
     for i := 0 to SampleCount - 1 do
       for j := 0 to ChannelCount - 1 do
-        fs.WriteWord(bandData[index].dstData[j, i]);
+        data[i * ChannelCount + j] := bandData[index].dstData[j, i];
+
+    fs.WriteBuffer(data[0], SampleCount * ChannelCount * 2);
   finally
     fs.Free;
   end;
@@ -762,7 +773,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.5;
+  CLZRatio = 0.33;
 var
   j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -896,7 +907,6 @@ procedure TEncoder.MakeFrames;
 
     frm.MakeChunks;
     frm.KMeansReduce;
-    //frm.SortAndReindexReducedChunks; //TODO: maybe useful for better LZ compression
     for i := 0 to BandCount - 1 do
       frm.bands[i].MakeDstData;
     Write('.');
@@ -944,7 +954,7 @@ begin
   inputFN := InFN;
   outputFN := OutFN;
 
-  BitRate := 192;
+  BitRate := 150;
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
@@ -1089,7 +1099,7 @@ end;
 
 class function TEncoder.make16BitSample(smp: Double): SmallInt;
 begin
-  Result := EnsureRange(Trunc(smp * -Low(SmallInt)), Low(SmallInt), High(SmallInt));
+  Result := EnsureRange(round(smp * High(SmallInt)), Low(SmallInt), High(SmallInt));
 end;
 
 class function TEncoder.makeFloatSample(smp: SmallInt): Double;
@@ -1105,7 +1115,7 @@ begin
   obd := (1 shl (OutBitDepth - 1));
   smp16 := round(smp * obd * (1 + Attenuation));
   if Negative then smp16 := -smp16;
-  smp16 := EnsureRange(smp16, -obd, obd - 1);
+  smp16 := EnsureRange(smp16, -obd + 1, obd - 1);
   Result := smp16;
 end;
 
@@ -1118,7 +1128,7 @@ begin
   smp16 := smp;
   if Negative then smp16 := -smp16;
   Result := smp16 / obd;
-  Assert(InRange(Result, -1.0, 1.0));
+  Result := EnsureRange(Result, -1.0, 1.0);
 end;
 
 class function TEncoder.ComputeAttenuation(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
@@ -1277,21 +1287,21 @@ var
   rr, rt: TReal1DArray;
 begin
   len := length(smpRef) * length(smpRef[0]);
-  Assert(len = length(smpTst) * length(smpTst[0]), 'ComputeCorrelation length mismatch!');
+  Assert(len = length(smpTst) * length(smpTst[0]), 'ComputePsyADelta length mismatch!');
   SetLength(rr, len);
   SetLength(rt, len);
 
   for j := 0 to High(smpRef) do
     for i := 0 to High(smpRef[0]) do
     begin
-      rr[j * Length(smpRef) + i] := smpRef[j, i];
-      rt[j * Length(smpRef) + i] := smpTst[j, i];
+      rr[j * Length(smpRef[0]) + i] := smpRef[j, i];
+      rt[j * Length(smpRef[0]) + i] := smpTst[j, i];
     end;
 
   //rr := ComputeDCT(len, rr);
   //rt := ComputeDCT(len, rt);
 
-  Result := CompareEuclidean(0, len - 1, rr, rt);
+  Result := CompareEuclidean(0, len - 1, rr, rt) * length(smpRef);
 end;
 
 class procedure TEncoder.createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);

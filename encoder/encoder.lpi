@@ -110,13 +110,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs8 -rbb"/>
+        <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out1.wav -v -pr0"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\opus_test\mo_b_44.wav ..\out1.wav -v -br128 -vfr0.5 -cs8 -rbb"/>
+            <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out1.wav -v -pr0"/>
           </local>
         </Mode0>
       </Modes>
