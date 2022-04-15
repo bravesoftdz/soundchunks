@@ -597,12 +597,25 @@ end;
 
 procedure TEncoder.Load;
 var
+  wavFN: String;
   fs: TFileStream;
   i, j: Integer;
   data: TSmallIntDynArray;
 begin
-  WriteLn('Load ', inputFN);
-  fs := TFileStream.Create(inputFN, fmOpenRead or fmShareDenyNone);
+  if LowerCase(ExtractFileExt(inputFN)) <> '.wav' then
+  begin
+    WriteLn('Convert ', inputFN);
+    wavFN := GetTempFileName + '.wav';
+    DoExternalSOX(inputFN, wavFN);
+  end
+  else
+  begin
+    wavFN := inputFN;
+  end;
+
+  WriteLn('Load ', wavFN);
+
+  fs := TFileStream.Create(wavFN, fmOpenRead or fmShareDenyNone);
   try
     fs.ReadBuffer(srcHeader[0], SizeOf(srcHeader));
     SampleRate := PInteger(@srcHeader[$18])^;
@@ -619,6 +632,9 @@ begin
         srcData[j, i] := data[i * ChannelCount + j];
   finally
     fs.Free;
+
+    if wavFN <> inputFN then
+      DeleteFile(wavFN);
   end;
 end;
 
@@ -1273,10 +1289,10 @@ begin
   FNTst := GetTempFileName('', 'tst-'+IntToStr(GetCurrentThreadId))+'.wav';
 
   createWAV(ChannelCount, 16, SampleRate, FNTmp, smpRef);
-  DoExternalResample(FNTmp, FNRef, 48000);
+  DoExternalSOX(FNTmp, FNRef, 48000);
 
   createWAV(ChannelCount, 16, SampleRate, FNTmp, smpTst);
-  DoExternalResample(FNTmp, FNTst, 48000);
+  DoExternalSOX(FNTmp, FNTst, 48000);
 
   Result := DoExternalEAQUAL(FNRef, FNTst, Verbz, UseDIX, -1);
 
@@ -1400,7 +1416,7 @@ begin
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
 
       WriteLn;
-      Writeln('(source file must be 16bit WAV)');
+      Writeln('(source file must be 16bit WAV or anything SOX can convert)');
       WriteLn;
       Exit;
     end;

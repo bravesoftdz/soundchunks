@@ -56,7 +56,7 @@ type
   TYakmoCallback = procedure(cbData: Pointer); stdcall;
 
 procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean; var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
-procedure DoExternalResample(AFNIn, AFNOut: String; SampleRate: Integer);
+procedure DoExternalSOX(AFNIn, AFNOut: String; SampleRate: Integer = 0);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
 procedure LZCompress(ASourceStream: TStream; PrintProgress: Boolean; var ADestStream: TStream);
@@ -325,7 +325,7 @@ begin
   end;
 end;
 
-procedure DoExternalResample(AFNIn, AFNOut: String; SampleRate: Integer);
+procedure DoExternalSOX(AFNIn, AFNOut: String; SampleRate: Integer);
 var
   i: Integer;
   Output, ErrOut: String;
@@ -335,7 +335,10 @@ begin
 
   Process.CurrentDirectory := ExtractFilePath(ParamStr(0));
   Process.Executable := 'sox\sox.exe';
-  Process.Parameters.Add('"' + AFNIn + '" "' + AFNOut + '" rate -h ' + IntToStr(SampleRate));
+  if SampleRate = 0 then
+    Process.Parameters.Add('"' + AFNIn + '" "' + AFNOut + '"')
+  else
+    Process.Parameters.Add('"' + AFNIn + '" "' + AFNOut + '" rate -h ' + IntToStr(SampleRate));
   Process.ShowWindow := swoHIDE;
   Process.Priority := ppNormal;
 
