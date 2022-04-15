@@ -846,16 +846,16 @@ begin
   avgPower := 0.0;
   for j := 0 to ChannelCount - 1 do
     for i := 0 to SampleCount - 1 do
-      avgPower += abs(makeFloatSample(srcData[j, i]));
-  avgPower := avgPower / (SampleCount * ChannelCount);
+      avgPower += Sqr(makeFloatSample(srcData[j, i]));
+  avgPower := Sqrt(avgPower) / (SampleCount * ChannelCount);
 
   totalPower := 0.0;
   for i := 0 to SampleCount - 1 do
   begin
     smp := 0.0;
     for j := 0 to ChannelCount - 1 do
-      smp += abs(makeFloatSample(srcData[j, i]));
-    smp /= ChannelCount;
+      smp += Sqr(makeFloatSample(srcData[j, i]));
+    smp := Sqrt(smp) / ChannelCount;
 
     totalPower += 1.0 - lerp(avgPower, smp, VariableFrameSizeRatio);
   end;
@@ -875,8 +875,8 @@ begin
   begin
     smp := 0.0;
     for j := 0 to ChannelCount - 1 do
-      smp += abs(makeFloatSample(srcData[j, i]));
-    smp /= ChannelCount;
+      smp += Sqr(makeFloatSample(srcData[j, i]));
+    smp := Sqrt(smp) / ChannelCount;
 
     curPower += 1.0 - lerp(avgPower, smp, VariableFrameSizeRatio);
 
