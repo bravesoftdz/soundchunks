@@ -8,6 +8,7 @@ const
   BandCount = 1;
   C1Freq = 32.703125;
   MaxChunksPerFrame = 4096;
+  FrameLength = 2000; // im ms. if changed, adjust CLZRatio in PrepareFrames
 
 type
   TEncoder = class;
@@ -476,7 +477,7 @@ begin
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids,encoder.ChunksPerFrame, encoder.chunkSize);
 
-    Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, 0);
+    Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
     yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
@@ -552,7 +553,9 @@ var
 begin
   Assert(reducedChunks.Count <= MaxChunksPerFrame);
   w := reducedChunks.Count;
-  w := w or (BandCount shl 13);
+  w := w or ((BandCount - 1) shl 13);
+  AStream.WriteWord(w and $ffff);
+  w := (encoder.ChunkBitDepth shl 8) or encoder.ChunkSize;
   AStream.WriteWord(w and $ffff);
 
   cl := reducedChunks;
@@ -568,7 +571,7 @@ begin
       for k := 0 to cl.Count - 1 do
         for l := 0 to encoder.ChunkSize div 2 - 1 do
         begin
-          AStream.WriteByte(((cl[k].dstData[l * 2] shr 8) shl 4) or (cl[k].dstData[l * 2 + 1] shr 8));
+          AStream.WriteByte((((cl[k].dstData[l * 2] shr 8) and $0f) shl 4) or ((cl[k].dstData[l * 2 + 1] shr 8) and $0f));
           AStream.WriteByte(cl[k].dstData[l * 2] and $ff);
           AStream.WriteByte(cl[k].dstData[l * 2 + 1] and $ff);
         end;
@@ -773,7 +776,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.33;
+  CLZRatio : array[Boolean{ChunkBitDepth = 12?} , Boolean{variable part?}] of Double = ((308.694, 1.18285), (313.768, 1.08844));  // dependent on FrameLength
 var
   j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -796,26 +799,27 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount / SampleRate) * BitRate / CLZRatio * (1024 / 8));
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * (CLZRatio[ChunkBitDepth = 12, False] + CLZRatio[ChunkBitDepth = 12, True] * BitRate) * (1024 / 8));
 
   if Verbose then
   begin
     writeln('ProjectedByteSize = ', ProjectedByteSize);
   end;
 
-  fixedCost := SizeOf(Word) {stream terminator};
+  fixedCost := 0 {no header besides frame};
   bandCost := 0;
   for i := 0 to BandCount - 1 do
     bandCost += (SampleCount * ChannelCount * (Round(log2(MaxChunksPerFrame {MaxChunksPerFrame} * 8 {dstAttenuation} * 2 {dstNegative})))) div (8 {bytes -> bits} * ChunkSize * bandData[i].underSample);
+
+  FrameCount := ceil(SampleCount / (SampleRate * (FrameLength / 1000)));
 
   Inc(ChunksPerFrame);
   repeat
     Dec(ChunksPerFrame);
 
-    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + SizeOf(Word) {frame header};
-    FrameCount := (ProjectedByteSize - fixedCost - bandCost) div frameCost;
-
+    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + 2 * SizeOf(Word) {frame header};
     tentativeByteSize := fixedCost + bandCost + FrameCount * frameCost;
+
   until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
 
   ProjectedByteSize := tentativeByteSize;
@@ -853,7 +857,7 @@ begin
       smp += abs(makeFloatSample(srcData[j, i]));
     smp /= ChannelCount;
 
-    totalPower += avgPower - avgPower * VariableFrameSizeRatio + VariableFrameSizeRatio * smp;
+    totalPower += 1.0 - lerp(avgPower, smp, VariableFrameSizeRatio);
   end;
 
   perFramePower := totalPower / FrameCount;
@@ -874,7 +878,7 @@ begin
       smp += abs(makeFloatSample(srcData[j, i]));
     smp /= ChannelCount;
 
-    curPower += avgPower - avgPower * VariableFrameSizeRatio + VariableFrameSizeRatio * smp;
+    curPower += 1.0 - lerp(avgPower, smp, VariableFrameSizeRatio);
 
     if (i mod BlockSampleCount = 0) and (curPower >= perFramePower) then
     begin
@@ -962,7 +966,7 @@ begin
   ChunkSize := 4;
   ReduceBassBand := True;
   TrebleBoost := False;
-  VariableFrameSizeRatio := 0.0;
+  VariableFrameSizeRatio := 1.0;
 
   ChunksPerFrame := MaxChunksPerFrame;
   BandTransFactor := 1 / 256;
@@ -1383,20 +1387,20 @@ begin
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       Writeln('Main options:');
-      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-br128"');
+      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; default: "-br150"');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
-      WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); recommended: "-vfr0.5"');
+      WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); default: "-vfr1.0"');
       WriteLn(#9'-v'#9'verbose mode');
       Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
-      WriteLn(#9'-cpf'#9'max. chunks per frame');
+      WriteLn(#9'-cpf'#9'max. chunks per frame (256-4096)');
       WriteLn(#9'-pbb'#9'disable lossy compression on bass band');
-      WriteLn(#9'-cbd'#9'chunk bit depth (1-8)');
+      WriteLn(#9'-cbd'#9'chunk bit depth (8,12)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
 
       WriteLn;
-      Writeln('(source file must be 16bit mono WAV)');
+      Writeln('(source file must be 16bit WAV)');
       WriteLn;
       Exit;
     end;
