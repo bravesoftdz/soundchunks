@@ -47,6 +47,7 @@
           </CodeGeneration>
           <Linking>
             <Debugging>
+              <DebugInfoType Value="dsDwarf3"/>
               <UseExternalDbgSyms Value="True"/>
             </Debugging>
             <LinkSmart Value="True"/>
@@ -110,13 +111,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out1.wav -v -pr0"/>
+        <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br999"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\opus_test\mo_10_44.wav ..\out1.wav -v -pr0"/>
+            <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br999"/>
           </local>
         </Mode0>
       </Modes>

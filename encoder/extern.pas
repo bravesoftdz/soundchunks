@@ -59,7 +59,7 @@ procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision:
 procedure DoExternalSOX(AFNIn, AFNOut: String; SampleRate: Integer = 0);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
 
-procedure LZCompress(ASourceStream: TStream; PrintProgress: Boolean; var ADestStream: TStream);
+procedure LZCompress(ASourceStream: TStream; PrintProgress, Decompress: Boolean; ADestStream: TStream);
 
 procedure GenerateSVMLightData(Dataset: TFloatDynArray2; Output: TStringList; Header: Boolean);
 function GenerateSVMLightFile(Dataset: TFloatDynArray2; Header: Boolean): String;
@@ -196,7 +196,7 @@ begin
   end;
 end;
 
-procedure LZCompress(ASourceStream: TStream; PrintProgress: Boolean; var ADestStream: TStream);
+procedure LZCompress(ASourceStream: TStream; PrintProgress, Decompress: Boolean; ADestStream: TStream);
 var
   Process: TProcess;
   RetCode: Integer;
@@ -218,7 +218,10 @@ begin
     SrcStream.Free;
   end;
 
-  Process.Parameters.Add('e "' + SrcFN + '" "' + DstFN + '" -lc0 -pb1');
+  if Decompress then
+    Process.Parameters.Add('d "' + SrcFN + '" "' + DstFN + '"')
+  else
+    Process.Parameters.Add('e "' + SrcFN + '" "' + DstFN + '" -lc0 -pb1');
   Process.ShowWindow := swoHIDE;
   Process.Priority := ppIdle;
 

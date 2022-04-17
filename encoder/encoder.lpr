@@ -9,6 +9,7 @@ const
   C1Freq = 32.703125;
   MaxChunksPerFrame = 4096;
   FrameLength = 2000; // im ms. if changed, adjust CLZRatio in PrepareFrames
+  StreamVersion = 0;
 
 type
   TEncoder = class;
@@ -337,8 +338,8 @@ begin
   finalChunks.Clear;
   finalChunks.Capacity := ChunkCount * frame.encoder.ChannelCount;
 
-  for j := 0 to frame.encoder.ChannelCount - 1 do
-    for i := 0 to ChunkCount - 1 do
+  for i := 0 to ChunkCount - 1 do
+    for j := 0 to frame.encoder.ChannelCount - 1 do
     begin
       chunk := TChunk.Create(frame, i, index, globalData^.underSample, srcData[j]);
       chunk.channel := j;
@@ -547,16 +548,19 @@ end;
 
 procedure TFrame.SaveStream(AStream: TStream);
 var
-  j, k, l: Integer;
+  j, k, l, s1, s2: Integer;
   w : Integer;
   cl: TChunkList;
 begin
   Assert(reducedChunks.Count <= MaxChunksPerFrame);
-  w := reducedChunks.Count;
-  w := w or ((BandCount - 1) shl 13);
+
+  w := (encoder.ChannelCount shl 8) or StreamVersion;
   AStream.WriteWord(w and $ffff);
-  w := (encoder.ChunkBitDepth shl 8) or encoder.ChunkSize;
+  w := reducedChunks.Count or ((BandCount - 1) shl 13);
   AStream.WriteWord(w and $ffff);
+  w := (encoder.ChunkSize shl 8) or encoder.ChunkBitDepth;
+  AStream.WriteWord(w and $ffff);
+  AStream.WriteDWord(encoder.SampleRate);
 
   cl := reducedChunks;
   if cl.Count = 0 then
@@ -571,9 +575,12 @@ begin
       for k := 0 to cl.Count - 1 do
         for l := 0 to encoder.ChunkSize div 2 - 1 do
         begin
-          AStream.WriteByte((((cl[k].dstData[l * 2] shr 8) and $0f) shl 4) or ((cl[k].dstData[l * 2 + 1] shr 8) and $0f));
-          AStream.WriteByte(cl[k].dstData[l * 2] and $ff);
-          AStream.WriteByte(cl[k].dstData[l * 2 + 1] and $ff);
+          s1 := cl[k].dstData[l * 2 + 0] + 2048;
+          s2 := cl[k].dstData[l * 2 + 1] + 2048;
+
+          AStream.WriteByte(((s1 shr 4) and $f0) or ((s2 shr 8) and $0f));
+          AStream.WriteByte(s1 and $ff);
+          AStream.WriteByte(s2 and $ff);
         end;
     else
       Assert(False, 'ChunkBitDepth not supported');
@@ -583,9 +590,11 @@ begin
   begin
     cl := bands[j].finalChunks;
 
+    AStream.WriteDWord(cl.Count div encoder.ChannelCount);
+
     for k := 0 to cl.Count - 1 do
     begin
-      w := cl[k].index;
+      w := cl[k].reducedChunk.index;
       w := w or (cl[k].dstAttenuation shl 12);
       w := w or IfThen(cl[k].dstNegative, $8000);
       AStream.WriteWord(w and $ffff);
@@ -701,7 +710,7 @@ begin
     for i := 0 to FrameCount - 1 do
       frames[i].SaveStream(ZStream);
 
-    LZCompress(ZStream, False, AStream);
+    LZCompress(ZStream, False, False, AStream);
   finally
     ZStream.Free;
   end;
@@ -792,7 +801,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio : array[Boolean{ChunkBitDepth = 12?} , Boolean{variable part?}] of Double = ((308.694, 1.18285), (313.768, 1.08844));  // dependent on FrameLength
+  CLZRatio = 0.85;
 var
   j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -815,7 +824,7 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount / SampleRate) * (CLZRatio[ChunkBitDepth = 12, False] + CLZRatio[ChunkBitDepth = 12, True] * BitRate) * (1024 / 8));
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * (BitRate / CLZRatio) * (1024 / 8));
 
   if Verbose then
   begin
@@ -833,7 +842,7 @@ begin
   repeat
     Dec(ChunksPerFrame);
 
-    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + 2 * SizeOf(Word) {frame header};
+    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
     tentativeByteSize := fixedCost + bandCost + FrameCount * frameCost;
 
   until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
@@ -1041,7 +1050,7 @@ begin
       begin
         for j := 0 to BandCount - 1 do
         begin
-{$if false}
+{$if true}
           smp := frames[k].bands[j].dstData[l, i];
 {$else}
           smp := resamp[j][i];
@@ -1391,7 +1400,7 @@ begin
     FormatSettings.DecimalSeparator := '.';
 
 {$ifdef DEBUG}
-    ProcThreadPool.MaxThreadCount := 1;
+    //ProcThreadPool.MaxThreadCount := 1;
 {$else}
     SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
 {$endif}
