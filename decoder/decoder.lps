@@ -9,7 +9,7 @@
         <Filename Value="decoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <CursorPos X="46" Y="42"/>
+        <CursorPos X="40" Y="6"/>
         <UsageCount Value="32"/>
         <Loaded Value="True"/>
       </Unit>
@@ -152,7 +152,6 @@
       </Modes>
     </RunParams>
     <HistoryLists>
-      <List Name="WorkingDirectory" Type="File" Count="1"/>
       <List Name="LaunchingApplication" Type="File" Count="1">
         <Item1 Value="C:\Windows\system32\cmd.exe /C ${TargetCmdLine}"/>
       </List>

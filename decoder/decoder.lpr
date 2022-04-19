@@ -3,7 +3,7 @@ program decoder;
 uses Types, SysUtils, Classes, Math, extern;
 
 const
-  CAttrMul = round(High(SmallInt) * (High(SmallInt) / 2047));
+  CAttrMul = round((High(SmallInt) + 1) * (High(SmallInt) / 2047));
   CAttrLookup : array[0 .. 15] of Integer = (
     CAttrMul div (1 + 0),
     CAttrMul div (1 + 1),

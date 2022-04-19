@@ -824,7 +824,7 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount / SampleRate) * (BitRate / CLZRatio) * (1024 / 8));
+  ProjectedByteSize := ceil((SampleCount / SampleRate) * (ChannelCount * BitRate * CLZRatio) * (1024 / 8));
 
   if Verbose then
   begin
@@ -983,7 +983,7 @@ begin
   inputFN := InFN;
   outputFN := OutFN;
 
-  BitRate := 150;
+  BitRate := 250;
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;
