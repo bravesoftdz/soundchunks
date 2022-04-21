@@ -243,7 +243,7 @@ begin
   // compute overall sign
 
   sum := 0.0;
-  for i := 0 to frame.encoder.chunkSize - 1 do
+  for i := 0 to High(srcData) do
     sum += srcData[i];
   dstNegative := (sum < 0);
 end;
@@ -258,7 +258,7 @@ var
   i: Integer;
   data: TDoubleDynArray;
 begin
-  SetLength(data, Length(srcData));
+  SetLength(data, Length(dstData));
   for i := 0 to High(data) do
     data[i] := dstData[i];
   dct := TEncoder.ComputeDCT4(Length(data), data);
@@ -266,7 +266,7 @@ end;
 
 procedure TChunk.ComputeAttenuation;
 begin
-  dstAttenuation := TEncoder.ComputeAttenuation(frame.encoder.chunkSize, srcData);
+  dstAttenuation := TEncoder.ComputeAttenuation(Length(srcData), srcData);
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -274,7 +274,7 @@ var
   j, k, pos, n: Integer;
   acc: Double;
 begin
-  for j := 0 to frame.encoder.chunkSize - 1 do
+  for j := 0 to High(srcData) do
   begin
     pos := j * underSample;
 
@@ -299,8 +299,8 @@ procedure TChunk.MakeDstData;
 var
   i: Integer;
 begin
-  SetLength(dstData, frame.encoder.chunkSize);
-  for i := 0 to frame.encoder.chunkSize - 1 do
+  SetLength(dstData, length(srcData));
+  for i := 0 to High(dstData) do
     dstData[i] := TEncoder.makeOutputSample(srcData[i], frame.encoder.ChunkBitDepth, dstAttenuation, dstNegative);
 end;
 
@@ -449,7 +449,7 @@ end;
 
 procedure TFrame.KMeansReduce;
 var
-  i, j, prec: Integer;
+  i, j, prec, colCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
@@ -462,11 +462,13 @@ begin
   prec := encoder.Precision;
   if prec = 0 then Exit;
 
-  SetLength(Dataset, chunkRefs.Count, encoder.chunkSize);
-  SetLength(centroid, encoder.chunkSize);
+  colCount := encoder.chunkSize;
+
+  SetLength(Dataset, chunkRefs.Count, colCount);
+  SetLength(centroid, colCount);
 
   for i := 0 to chunkRefs.Count - 1 do
-    for j := 0 to encoder.chunkSize - 1 do
+    for j := 0 to colCount - 1 do
       Dataset[i, j] := chunkRefs[i].dct[j];
 
   if chunkRefs.Count > encoder.ChunksPerFrame then
@@ -477,10 +479,10 @@ begin
       WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', encoder.ChunksPerFrame);
 
     SetLength(Clusters, chunkRefs.Count);
-    SetLength(Centroids,encoder.ChunksPerFrame, encoder.chunkSize);
+    SetLength(Centroids, encoder.ChunksPerFrame, colCount);
 
     Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
-    yakmo_load_train_data(Yakmo, chunkRefs.Count, encoder.chunkSize, @Dataset[0]);
+    yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
     yakmo_destroy(Yakmo);
@@ -508,15 +510,15 @@ begin
 
         reducedChunks.Add(chunk);
 
-        for j := 0 to encoder.chunkSize - 1 do
+        for j := 0 to colCount - 1 do
           centroid[j] := Centroids[CIList[i].Index][j];
 
         CIInv[CIList[i].Index] := i;
 
-        centroid := TEncoder.ComputeDCT4(encoder.ChunkSize, centroid);
+        centroid := TEncoder.ComputeDCT4(colCount, centroid);
 
-        SetLength(chunk.dstData, encoder.chunkSize);
-        for j := 0 to encoder.chunkSize - 1 do
+        SetLength(chunk.dstData, colCount);
+        for j := 0 to colCount - 1 do
           chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth) + 1, (1 shl encoder.ChunkBitDepth) - 1);
   	  end;
 
