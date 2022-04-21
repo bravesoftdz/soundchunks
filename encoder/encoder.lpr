@@ -203,7 +203,7 @@ begin
   Result := StrToFloatDef(copy(ParamStr(idx), Length(p) + 1), def);
 end;
 
-function lerp(x, y, alpha: TFloat): TFloat; inline;
+function lerp(x, y, alpha: Double): Double; inline;
 begin
   Result := x + (y - x) * alpha;
 end;
@@ -213,7 +213,7 @@ begin
   Result := x + ((y - x) * alpha) div maxAlpha;
 end;
 
-function revlerp(x, y, alpha: TFloat): TFloat; inline;
+function revlerp(x, y, alpha: Double): Double; inline;
 begin
   Result := (alpha - x) / (y - x);
 end;
@@ -453,8 +453,8 @@ var
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
-  Dataset: TDoubleDynArray2;
-  Centroids: TDoubleDynArray2;
+  Dataset: TFloatDynArray2;
+  Centroids: TFloatDynArray2;
   Yakmo: PYakmo;
   CIList: TCountIndexList;
   CIInv: TIntegerDynArray;
@@ -463,6 +463,7 @@ begin
   if prec = 0 then Exit;
 
   SetLength(Dataset, chunkRefs.Count, encoder.chunkSize);
+  SetLength(centroid, encoder.chunkSize);
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to encoder.chunkSize - 1 do
@@ -507,7 +508,9 @@ begin
 
         reducedChunks.Add(chunk);
 
-        centroid := Centroids[CIList[i].Index];
+        for j := 0 to encoder.chunkSize - 1 do
+          centroid[j] := Centroids[CIList[i].Index][j];
+
         CIInv[CIList[i].Index] := i;
 
         centroid := TEncoder.ComputeDCT4(encoder.ChunkSize, centroid);
@@ -801,7 +804,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.85;
+  CLZRatio = 0.86;
 var
   j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -824,7 +827,10 @@ begin
     for i := psc to SampleCount - 1 do
       srcData[j, i] := 0;
 
-  ProjectedByteSize := ceil((SampleCount / SampleRate) * (ChannelCount * BitRate * CLZRatio) * (1024 / 8));
+  if BitRate > 0 then
+    ProjectedByteSize := ceil((SampleCount / SampleRate) * (BitRate * 1024 / 8))
+  else
+    ProjectedByteSize := MaxInt;
 
   if Verbose then
   begin
@@ -843,7 +849,7 @@ begin
     Dec(ChunksPerFrame);
 
     frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
-    tentativeByteSize := fixedCost + bandCost + FrameCount * frameCost;
+    tentativeByteSize := Round((fixedCost + bandCost + FrameCount * frameCost) * CLZRatio);
 
   until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
 
@@ -983,7 +989,7 @@ begin
   inputFN := InFN;
   outputFN := OutFN;
 
-  BitRate := 250;
+  BitRate := -1;
   Precision := 1;
   LowCut := 0.0;
   HighCut := 24000.0;

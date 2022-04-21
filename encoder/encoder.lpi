@@ -111,18 +111,18 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br999"/>
+        <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br150"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br999"/>
+            <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -br150"/>
           </local>
         </Mode0>
       </Modes>
     </RunParams>
-    <Units Count="5">
+    <Units Count="4">
       <Unit0>
         <Filename Value="encoder.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -139,10 +139,6 @@
         <Filename Value="extern.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit3>
-      <Unit4>
-        <Filename Value="QMPBQF.pas"/>
-        <IsPartOfProject Value="True"/>
-      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
