@@ -8,7 +8,7 @@ const
   BandCount = 1;
   C1Freq = 32.703125;
   MaxChunksPerFrame = 4096;
-  FrameLength = 2000; // im ms. if changed, adjust CLZRatio in PrepareFrames
+  FrameLength = 10000; // im ms. if changed, adjust CLZRatio in PrepareFrames
   StreamVersion = 0;
 
 type
