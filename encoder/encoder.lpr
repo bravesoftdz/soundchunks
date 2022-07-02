@@ -221,6 +221,9 @@ end;
 { TChunk }
 
 constructor TChunk.Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
+var
+  i: Integer;
+  sum: Double;
 begin
   index := idx;
   bandIndex := bandIdx;
@@ -236,6 +239,13 @@ begin
     origSrcData := @srcDta[idx * frame.encoder.chunkSize * underSample];
     MakeSrcData(origSrcData);
   end;
+
+  // compute overall sign
+
+  sum := 0.0;
+  for i := 0 to High(srcData) do
+    sum += srcData[i];
+  dstNegative := (sum < 0);
 end;
 
 destructor TChunk.Destroy;
@@ -244,23 +254,19 @@ begin
 end;
 
 procedure TChunk.ComputeDCT;
+var
+  i: Integer;
+  data: TDoubleDynArray;
 begin
-  dct := TEncoder.ComputeDCT(Length(srcData), srcData);
+  SetLength(data, Length(dstData));
+  for i := 0 to High(data) do
+    data[i] := dstData[i];
+  dct := TEncoder.ComputeDCT4(Length(data), data);
 end;
 
 procedure TChunk.ComputeAttenuation;
-var
-  i: Integer;
-  sum: Double;
 begin
   dstAttenuation := TEncoder.ComputeAttenuation(Length(srcData), srcData);
-
-  // compute overall sign
-
-  sum := 0.0;
-  for i := 0 to High(srcData) do
-    sum += srcData[i];
-  dstNegative := (sum < 0);
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -367,7 +373,7 @@ begin
 
     for j := 0 to frame.encoder.chunkSize - 1 do
     begin
-      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.reducedChunk.dstAttenuation, chunk.reducedChunk.dstNegative);
+      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.dstAttenuation, chunk.dstNegative);
 
       for k := 0 to globalData^.underSample - 1 do
       begin
@@ -509,14 +515,11 @@ begin
 
         CIInv[CIList[i].Index] := i;
 
-        centroid := TEncoder.ComputeInvDCT(colCount, centroid);
+        centroid := TEncoder.ComputeDCT4(colCount, centroid);
 
         SetLength(chunk.dstData, colCount);
         for j := 0 to colCount - 1 do
-          chunk.srcData[j] := centroid[j];
-
-        chunk.ComputeAttenuation;
-        chunk.MakeDstData;
+          chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth) + 1, (1 shl encoder.ChunkBitDepth) - 1);
   	  end;
 
       for i := 0 to chunkRefs.Count - 1 do
@@ -597,8 +600,8 @@ begin
     for k := 0 to cl.Count - 1 do
     begin
       w := cl[k].reducedChunk.index;
-      w := w or (cl[k].reducedChunk.dstAttenuation shl 12);
-      w := w or IfThen(cl[k].reducedChunk.dstNegative, $8000);
+      w := w or (cl[k].dstAttenuation shl 12);
+      w := w or IfThen(cl[k].dstNegative, $8000);
       AStream.WriteWord(w and $ffff);
     end;
   end;
