@@ -144,8 +144,10 @@ type
     class function ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
-    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double; overload;
+    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double; overload;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
+    class function ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
     class procedure createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
 
     constructor Create(InFN, OutFN: String);
@@ -169,7 +171,6 @@ type
     function DoBPFilter(fcl, fch, transFactor: Double; const samples: TDoubleDynArray): TDoubleDynArray;
 
     function ComputeEAQUAL(chunkSz: Integer; UseDIX, Verbz: Boolean; const smpRef, smpTst: TSmallIntDynArray): Double;
-    function ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
   end;
 
 
@@ -222,8 +223,8 @@ end;
 
 constructor TChunk.Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
 var
-  i: Integer;
-  sum: Double;
+  i, j: Integer;
+  mx: Double;
 begin
   index := idx;
   bandIndex := bandIdx;
@@ -242,10 +243,15 @@ begin
 
   // compute overall sign
 
-  sum := 0.0;
+  mx := 0.0;
+  j := 0;
   for i := 0 to High(srcData) do
-    sum += srcData[i];
-  dstNegative := (sum < 0);
+    if abs(srcData[i]) > mx then
+    begin
+      j := i;
+      mx := abs(srcData[i]);
+    end;
+  dstNegative := (srcData[j] < 0);
 end;
 
 destructor TChunk.Destroy;
@@ -260,7 +266,7 @@ var
 begin
   SetLength(data, Length(dstData));
   for i := 0 to High(data) do
-    data[i] := dstData[i];
+    data[i] := dstData[i] / ((1 shl (frame.encoder.ChunkBitDepth - 1)) - 1);
   dct := TEncoder.ComputeDCT4(Length(data), data);
 end;
 
@@ -438,6 +444,7 @@ end;
 type
   TCountIndex = class
     Index, Count: Integer;
+    Value: Double;
   end;
 
   TCountIndexList = specialize TFPGObjectList<TCountIndex>;
@@ -447,9 +454,14 @@ begin
   Result := CompareValue(Item1.Count, Item2.Count);
 end;
 
+function CompareValueInvIndex (const Item1, Item2: TCountIndex): Integer;
+begin
+  Result := CompareValue(Item2.Value, Item1.Value);
+end;
+
 procedure TFrame.KMeansReduce;
 var
-  i, j, prec, colCount: Integer;
+  i, j, prec, colCount, clusterCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
@@ -463,6 +475,7 @@ begin
   if prec = 0 then Exit;
 
   colCount := encoder.chunkSize;
+  clusterCount := encoder.ChunksPerFrame;
 
   SetLength(Dataset, chunkRefs.Count, colCount);
   SetLength(centroid, colCount);
@@ -471,17 +484,17 @@ begin
     for j := 0 to colCount - 1 do
       Dataset[i, j] := chunkRefs[i].dct[j];
 
-  if chunkRefs.Count > encoder.ChunksPerFrame then
+  if chunkRefs.Count > clusterCount then
   begin
     // usual chunk reduction using K-Means
 
     if encoder.Verbose then
-      WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', encoder.ChunksPerFrame);
+      WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
 
     SetLength(Clusters, chunkRefs.Count);
-    SetLength(Centroids, encoder.ChunksPerFrame, colCount);
+    SetLength(Centroids, clusterCount, colCount);
 
-    Yakmo := yakmo_create(encoder.ChunksPerFrame, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
+    Yakmo := yakmo_create(clusterCount, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
     yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
     yakmo_train_on_data(Yakmo, @Clusters[0]);
     yakmo_get_centroids(Yakmo, @Centroids[0]);
@@ -490,7 +503,7 @@ begin
 
     CIList := TCountIndexList.Create;
     try
-      for i := 0 to encoder.ChunksPerFrame - 1 do
+      for i := 0 to clusterCount - 1 do
       begin
         CIList.Add(TCountIndex.Create);
         CIList[i].Index := i;
@@ -500,14 +513,13 @@ begin
             Inc(CIList[i].Count);
       end;
       CIList.Sort(@CompareCountIndex);
-      SetLength(CIInv, encoder.ChunksPerFrame);
+      SetLength(CIInv, clusterCount);
 
       reducedChunks.Clear;
       reducedChunks.Capacity := encoder.ChunksPerFrame;
-      for i := 0 to reducedChunks.Capacity - 1 do
+      for i := 0 to clusterCount - 1 do
       begin
         chunk := TChunk.Create(Self, i, -1, 1, nil);
-
         reducedChunks.Add(chunk);
 
         for j := 0 to colCount - 1 do
@@ -519,12 +531,11 @@ begin
 
         SetLength(chunk.dstData, colCount);
         for j := 0 to colCount - 1 do
-          chunk.dstData[j] := EnsureRange(round(centroid[j]), -(1 shl encoder.ChunkBitDepth) + 1, (1 shl encoder.ChunkBitDepth) - 1);
+          chunk.dstData[j] := EnsureRange(round(centroid[j] * ((1 shl (encoder.ChunkBitDepth - 1)) - 1)), -(1 shl (encoder.ChunkBitDepth - 1)), (1 shl (encoder.ChunkBitDepth - 1)) - 1);
   	  end;
 
       for i := 0 to chunkRefs.Count - 1 do
         chunkRefs[i].reducedChunk := reducedChunks[CIInv[Clusters[i]]];
-
     finally
       CIList.Free;
     end;
@@ -1285,6 +1296,18 @@ begin
   Result := sqrt(Result) / (lastCoeff - firstCoeff + 1);
 end;
 
+class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double;
+var
+  i: Integer;
+begin
+  Result := 0.0;
+
+  for i := firstCoeff to lastCoeff do
+    Result += sqr((dctA[i] - dctB[i]) / High(SmallInt));
+
+  Result := sqrt(Result) / (lastCoeff - firstCoeff + 1);
+end;
+
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
 var
   dStart, dEnd: Double;
@@ -1318,7 +1341,7 @@ begin
   DeleteFile(FNTst);
 end;
 
-function TEncoder.ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
+class function TEncoder.ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
 var
   i, j, len: Integer;
   rr, rt: TReal1DArray;
