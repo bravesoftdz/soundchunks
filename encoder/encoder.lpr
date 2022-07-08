@@ -478,7 +478,6 @@ begin
   clusterCount := encoder.ChunksPerFrame;
 
   SetLength(Dataset, chunkRefs.Count, colCount);
-  SetLength(centroid, colCount);
 
   for i := 0 to chunkRefs.Count - 1 do
     for j := 0 to colCount - 1 do
@@ -515,6 +514,8 @@ begin
       CIList.Sort(@CompareCountIndex);
       SetLength(CIInv, clusterCount);
 
+      SetLength(centroid, encoder.chunkSize);
+
       reducedChunks.Clear;
       reducedChunks.Capacity := encoder.ChunksPerFrame;
       for i := 0 to clusterCount - 1 do
@@ -522,15 +523,15 @@ begin
         chunk := TChunk.Create(Self, i, -1, 1, nil);
         reducedChunks.Add(chunk);
 
-        for j := 0 to colCount - 1 do
+        for j := 0 to encoder.chunkSize - 1 do
           centroid[j] := Centroids[CIList[i].Index][j];
 
         CIInv[CIList[i].Index] := i;
 
-        centroid := TEncoder.ComputeDCT4(colCount, centroid);
+        centroid := TEncoder.ComputeDCT4(encoder.chunkSize, centroid);
 
-        SetLength(chunk.dstData, colCount);
-        for j := 0 to colCount - 1 do
+        SetLength(chunk.dstData, encoder.chunkSize);
+        for j := 0 to encoder.chunkSize - 1 do
           chunk.dstData[j] := EnsureRange(round(centroid[j] * ((1 shl (encoder.ChunkBitDepth - 1)) - 1)), -(1 shl (encoder.ChunkBitDepth - 1)), (1 shl (encoder.ChunkBitDepth - 1)) - 1);
   	  end;
 
