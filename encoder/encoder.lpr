@@ -118,6 +118,7 @@ type
     ReduceBassBand: Boolean;
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
+    ChunkBlend: Integer;
 
     ChannelCount: Integer;
     SampleRate: Integer;
@@ -237,7 +238,7 @@ begin
 
   if Assigned(srcDta) then
   begin
-    origSrcData := @srcDta[idx * frame.encoder.chunkSize * underSample];
+    origSrcData := @srcDta[idx * (frame.encoder.chunkSize - frame.encoder.ChunkBlend) * underSample];
     MakeSrcData(origSrcData);
   end;
 
@@ -277,27 +278,34 @@ end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
 var
-  j, k, pos, n: Integer;
-  acc: Double;
+  i, j, pos, n: Integer;
+  f, acc: Double;
 begin
-  for j := 0 to High(srcData) do
+  for i := 0 to High(srcData) do
   begin
-    pos := j * underSample;
+    pos := i * underSample;
 
     acc := 0.0;
     n := 0;
-    for k := 0 to underSample - 1 do
+    for j := 0 to underSample - 1 do
     begin
-      if pos + k >= frame.SampleCount then
+      if pos + j >= frame.SampleCount then
         Break;
-      acc += origData[pos + k];
+      acc += origData[pos + j];
       Inc(n);
     end;
 
     if n = 0 then
-      srcData[j] := 0
+      srcData[i] := 0
     else
-      srcData[j] := acc / n;
+      srcData[i] := acc / n;
+  end;
+
+  for i := 0 to frame.encoder.ChunkBlend - 1 do
+  begin
+    f := (i + 1) / (frame.encoder.ChunkBlend + 1);
+    srcData[i] *= f;
+    srcData[frame.encoder.ChunkSize - 1 - i] *= f;
   end;
 end;
 
@@ -324,7 +332,7 @@ begin
   for i := 0 to High(srcData) do
     srcData[i] := @globalData^.filteredData[i, startSample];
 
-  ChunkCount := (endSample - startSample + 1 - 1) div (frame.encoder.ChunkSize * globalData^.underSample) + 1;
+  ChunkCount := (endSample - startSample + 1 - 1) div ((frame.encoder.ChunkSize - frame.encoder.ChunkBlend) * globalData^.underSample) + 1;
 
   finalChunks := TChunkList.Create;
 end;
@@ -384,10 +392,12 @@ begin
       for k := 0 to globalData^.underSample - 1 do
       begin
         if InRange(pos[chunk.channel], 0, High(dstData[chunk.channel])) then
-          dstData[chunk.channel, pos[chunk.channel]] := smp;
+          dstData[chunk.channel, pos[chunk.channel]] += smp;
         Inc(pos[chunk.channel]);
       end;
     end;
+
+    Dec(pos[chunk.channel], frame.encoder.ChunkBlend);
   end;
 end;
 
@@ -830,8 +840,8 @@ begin
 
   BlockSampleCount := 0;
   for i := 0 to BandCount - 1 do
-    if bandData[i].underSample * ChunkSize > BlockSampleCount then
-      BlockSampleCount := bandData[i].underSample * ChunkSize;
+    if bandData[i].underSample * (ChunkSize - ChunkBlend) > BlockSampleCount then
+      BlockSampleCount := bandData[i].underSample * (ChunkSize - ChunkBlend);
 
   // ensure srcData ends on a full block
   psc := SampleCount;
@@ -862,7 +872,7 @@ begin
   repeat
     Dec(ChunksPerFrame);
 
-    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth div 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
+    frameCost := (ChunksPerFrame * (ChunkSize - ChunkBlend)) * ChunkBitDepth div 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
     tentativeByteSize := Round((fixedCost + bandCost + FrameCount * frameCost) * CLZRatio);
 
   until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
@@ -1012,6 +1022,7 @@ begin
   ReduceBassBand := True;
   TrebleBoost := False;
   VariableFrameSizeRatio := 1.0;
+  ChunkBlend := 0;
 
   ChunksPerFrame := MaxChunksPerFrame;
   BandTransFactor := 1 / 256;
@@ -1444,7 +1455,7 @@ begin
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       Writeln('Main options:');
-      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; default: "-br150"');
+      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-br320"');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); default: "-vfr1.0"');
@@ -1455,6 +1466,7 @@ begin
       WriteLn(#9'-pbb'#9'disable lossy compression on bass band');
       WriteLn(#9'-cbd'#9'chunk bit depth (8,12)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
+      WriteLn(#9'-cb'#9'chunk blend');
 
       WriteLn;
       Writeln('(source file must be 16bit WAV or anything SOX can convert)');
@@ -1474,6 +1486,7 @@ begin
       enc.ChunksPerFrame := EnsureRange(round(ParamValue('-cpf', enc.ChunksPerFrame)), 256, MaxChunksPerFrame);
       enc.Verbose := HasParam('-v');
       enc.ReduceBassBand := not HasParam('-pbb');
+      enc.ChunkBlend := EnsureRange(round(ParamValue('-cb', enc.ChunkBlend)), 0, enc.ChunkSize div 2);
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
@@ -1486,6 +1499,7 @@ begin
         WriteLn('ReduceBassBand = ', BoolToStr(enc.ReduceBassBand, True));
         WriteLn('ChunkBitDepth = ', enc.ChunkBitDepth);
         WriteLn('Precision = ', enc.Precision);
+        WriteLn('ChunkBlend = ', enc.ChunkBlend);
       end;
       WriteLn;
 
