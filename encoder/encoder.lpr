@@ -10,6 +10,7 @@ const
   MaxChunksPerFrame = 4096;
   FrameLength = 10000; // im ms. if changed, adjust CLZRatio in PrepareFrames
   StreamVersion = 0;
+  MaxAttenuation = 6;
 
 type
   TEncoder = class;
@@ -218,6 +219,13 @@ end;
 function revlerp(x, y, alpha: Double): Double; inline;
 begin
   Result := (alpha - x) / (y - x);
+end;
+
+function nan0(x: Double): Double; inline;
+begin
+  Result := 0;
+  if not IsNan(x) then
+    Result := x;
 end;
 
 { TChunk }
@@ -459,9 +467,9 @@ type
 
   TCountIndexList = specialize TFPGObjectList<TCountIndex>;
 
-function CompareCountIndex (const Item1, Item2: TCountIndex): Integer;
+function CompareCountInvIndex (const Item1, Item2: TCountIndex): Integer;
 begin
-  Result := CompareValue(Item1.Count, Item2.Count);
+  Result := CompareValue(Item2.Count, Item1.Count);
 end;
 
 function CompareValueInvIndex (const Item1, Item2: TCountIndex): Integer;
@@ -471,7 +479,7 @@ end;
 
 procedure TFrame.KMeansReduce;
 var
-  i, j, prec, colCount, clusterCount: Integer;
+  i, j, k, prec, colCount, clusterCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
@@ -480,9 +488,14 @@ var
   Yakmo: PYakmo;
   CIList: TCountIndexList;
   CIInv: TIntegerDynArray;
+
+  best: TANNFloat;
+  bestIdx: Integer;
+  tmp: TANNFloatDynArray2;
+  tmp2: TANNFloatDynArray;
+  KDT: PANNkdtree;
 begin
   prec := encoder.Precision;
-  if prec = 0 then Exit;
 
   colCount := encoder.chunkSize;
   clusterCount := encoder.ChunksPerFrame;
@@ -493,7 +506,7 @@ begin
     for j := 0 to colCount - 1 do
       Dataset[i, j] := chunkRefs[i].dct[j];
 
-  if chunkRefs.Count > clusterCount then
+  if (prec > 0) and (chunkRefs.Count > clusterCount) then
   begin
     // usual chunk reduction using K-Means
 
@@ -521,7 +534,7 @@ begin
           if Clusters[j] = i then
             Inc(CIList[i].Count);
       end;
-      CIList.Sort(@CompareCountIndex);
+      CIList.Sort(@CompareCountInvIndex);
       SetLength(CIInv, clusterCount);
 
       SetLength(centroid, encoder.chunkSize);
@@ -534,7 +547,7 @@ begin
         reducedChunks.Add(chunk);
 
         for j := 0 to encoder.chunkSize - 1 do
-          centroid[j] := Centroids[CIList[i].Index][j];
+          centroid[j] := nan0(Centroids[CIList[i].Index][j]);
 
         CIInv[CIList[i].Index] := i;
 
@@ -545,8 +558,31 @@ begin
           chunk.dstData[j] := EnsureRange(round(centroid[j] * ((1 shl (encoder.ChunkBitDepth - 1)) - 1)), -(1 shl (encoder.ChunkBitDepth - 1)), (1 shl (encoder.ChunkBitDepth - 1)) - 1);
   	  end;
 
+      SetLength(tmp, clusterCount * MaxAttenuation * 2 {Negative}, encoder.chunkSize);
+      SetLength(tmp2, encoder.chunkSize);
+      for j := 0 to high(tmp) do
+        for k := 0 to encoder.ChunkSize - 1 do
+          tmp[j, k] := TEncoder.makeFloatSample(reducedChunks[(j shr 1) div MaxAttenuation].dstData[k], encoder.ChunkBitDepth, (j shr 1) mod MaxAttenuation, j and 1 <> 0);
+
+      KDT := ann_kdtree_create(@tmp[0], Length(tmp), encoder.ChunkSize, 1, ANN_KD_SUGGEST);
+
       for i := 0 to chunkRefs.Count - 1 do
+      begin
+{$if true}
+        for k := 0 to encoder.ChunkSize - 1 do
+          tmp2[k] := chunkRefs[i].srcData[k];
+
+        bestIdx := ann_kdtree_search(KDT, @tmp2[0], 0.0, @best);
+
+        chunkRefs[i].dstNegative := bestIdx and 1 <> 0;
+        chunkRefs[i].dstAttenuation := (bestIdx shr 1) mod MaxAttenuation;
+        chunkRefs[i].reducedChunk := reducedChunks[(bestIdx shr 1) div MaxAttenuation];
+{$else}
         chunkRefs[i].reducedChunk := reducedChunks[CIInv[Clusters[i]]];
+{$ifend}
+      end;
+
+      ann_kdtree_destroy(KDT);
     finally
       CIList.Free;
     end;
@@ -828,11 +864,11 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.86;
+  CLZRatio = 0.92;
 var
-  j, i, k, fixedCost, frameCost, bandCost, nextStart, psc, tentativeByteSize: Integer;
+  j, i, k, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
-  avgPower, totalPower, perFramePower, curPower, smp: Double;
+  fixedCost, frameCost, bandCost, avgPower, totalPower, perFramePower, curPower, smp: Double;
 begin
   MakeBandGlobalData;
 
@@ -861,21 +897,23 @@ begin
     writeln('ProjectedByteSize = ', ProjectedByteSize);
   end;
 
-  fixedCost := 0 {no header besides frame};
-  bandCost := 0;
-  for i := 0 to BandCount - 1 do
-    bandCost += (SampleCount * ChannelCount * (Round(log2(MaxChunksPerFrame {MaxChunksPerFrame} * 8 {dstAttenuation} * 2 {dstNegative})))) div (8 {bytes -> bits} * ChunkSize * bandData[i].underSample);
-
   FrameCount := ceil(SampleCount / (SampleRate * (FrameLength / 1000)));
 
   Inc(ChunksPerFrame);
   repeat
     Dec(ChunksPerFrame);
 
-    frameCost := (ChunksPerFrame * (ChunkSize - ChunkBlend)) * ChunkBitDepth div 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
+    fixedCost := 0 {no header besides frame};
+
+    bandCost := 0;
+    for i := 0 to BandCount - 1 do
+      bandCost += (SampleCount * ChannelCount * (Log2(ChunksPerFrame) + Log2(MaxAttenuation) + 1 {dstNegative})) / (8 {bytes -> bits} * (ChunkSize - ChunkBlend) * bandData[i].underSample);
+
+    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth / 8 + (3 * SizeOf(Word) + (1 + BandCount) * SizeOf(Cardinal)) {frame header};
+
     tentativeByteSize := Round((fixedCost + bandCost + FrameCount * frameCost) * CLZRatio);
 
-  until (tentativeByteSize <= ProjectedByteSize) and (FrameCount >= 1) or (ChunksPerFrame <= 0);
+  until (tentativeByteSize <= ProjectedByteSize) or (ChunksPerFrame <= 1);
 
   ProjectedByteSize := tentativeByteSize;
 
@@ -1021,7 +1059,7 @@ begin
   ChunkSize := 4;
   ReduceBassBand := True;
   TrebleBoost := False;
-  VariableFrameSizeRatio := 1.0;
+  VariableFrameSizeRatio := 0.0;
   ChunkBlend := 0;
 
   ChunksPerFrame := MaxChunksPerFrame;
@@ -1202,7 +1240,7 @@ begin
   Result := 1;
   repeat
     Inc(Result)
-  until (hiSmp * Result > High(SmallInt)) or (Result > 8);
+  until (hiSmp * Result > High(SmallInt)) or (Result > MaxAttenuation);
   Dec(Result, 2);
 end;
 

@@ -13,6 +13,7 @@ type
   TFloatDynArray = array of TFloat;
   TFloatDynArray2 = array of TFloatDynArray;
   TDoubleDynArray2 = array of TDoubleDynArray;
+  TDoubleDynArray3 = array of TDoubleDynArray2;
   TSmallIntDynArray2 = array of TSmallIntDynArray;
   PFloat = ^TFloat;
   PPFloat = ^PFloat;
@@ -55,6 +56,26 @@ type
 
   TYakmoCallback = procedure(cbData: Pointer); stdcall;
 
+  TANNsplitRule = (
+  		ANN_KD_STD = 0,      // the optimized kd-splitting rule
+  		ANN_KD_MIDPT = 1,    // midpoint split
+  		ANN_KD_FAIR	= 2,     // fair split
+  		ANN_KD_SL_MIDPT = 3, // sliding midpoint splitting method
+  		ANN_KD_SL_FAIR = 4,  // sliding fair split method
+  		ANN_KD_SUGGEST = 5 // the authors' suggestion for best
+  );
+
+  TANNFloat = Single;
+  PANNFloat = ^TANNFloat;
+  PPANNFloat = ^PANNFloat;
+  TANNFloatDynArray = array of TANNFloat;
+  TANNFloatDynArray2 = array of TANNFloatDynArray;
+
+  TANNkdtree = record
+  end;
+
+  PANNkdtree = ^TANNkdtree;
+
 procedure DoExternalSKLearn(Dataset: TDoubleDynArray2;  ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean; var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
 procedure DoExternalSOX(AFNIn, AFNOut: String; SampleRate: Integer = 0);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
@@ -71,6 +92,13 @@ procedure yakmo_destroy(ay: PYakmo); stdcall; external 'yakmo.dll';
 procedure yakmo_load_train_data(ay: PYakmo; rowCount: Cardinal; colCount: Cardinal; dataset: PPFloat); stdcall; external 'yakmo.dll';
 procedure yakmo_train_on_data(ay: PYakmo; pointToCluster: PInteger); stdcall; external 'yakmo.dll';
 procedure yakmo_get_centroids(ay: PYakmo; centroids: PPFloat); stdcall; external 'yakmo.dll';
+
+function ann_kdtree_create(pa: PPANNFloat; n, dd, bs: Integer; split: TANNsplitRule): PANNkdtree; external 'ANN.dll';
+procedure ann_kdtree_destroy(akd: PANNkdtree); external 'ANN.dll';
+function ann_kdtree_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; external 'ANN.dll';
+function ann_kdtree_pri_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; external 'ANN.dll';
+procedure ann_kdtree_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); external 'ANN.dll';
+procedure ann_kdtree_pri_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); external 'ANN.dll';
 
 function InvariantFormatSettings: TFormatSettings;
 function internalRuncommand(p:TProcess;var outputstring:string;

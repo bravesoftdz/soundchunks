@@ -111,13 +111,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -pr0"/>
+        <CommandLineParams Value="&quot;..\wayfinder - fr-025 (single edit).wav&quot; ..\fr025_ -cb0 -pr0"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\opus_test\mo_b_44_2.wav ..\out1.wav -v -pr0"/>
+            <CommandLineParams Value="&quot;..\wayfinder - fr-025 (single edit).wav&quot; ..\fr025_ -cb0 -pr0"/>
           </local>
         </Mode0>
       </Modes>
