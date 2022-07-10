@@ -5,22 +5,22 @@ uses Types, SysUtils, Classes, Math, extern;
 const
   CAttrMul = round((High(SmallInt) + 1) * (High(SmallInt) / 2047));
   CAttrLookup : array[0 .. 15] of Integer = (
-    CAttrMul div (1 + 0),
-    CAttrMul div (1 + 1),
-    CAttrMul div (1 + 2),
-    CAttrMul div (1 + 3),
-    CAttrMul div (1 + 4),
-    CAttrMul div (1 + 5),
-    CAttrMul div (1 + 6),
-    CAttrMul div (1 + 7),
-    -CAttrMul div (1 + 0),
-    -CAttrMul div (1 + 1),
-    -CAttrMul div (1 + 2),
-    -CAttrMul div (1 + 3),
-    -CAttrMul div (1 + 4),
-    -CAttrMul div (1 + 5),
-    -CAttrMul div (1 + 6),
-    -CAttrMul div (1 + 7)
+    round(CAttrMul / 1.0),
+    round(CAttrMul / 1.2),
+    round(CAttrMul / 1.6),
+    round(CAttrMul / 2.2),
+    round(CAttrMul / 3.0),
+    round(CAttrMul / 4.0),
+    round(CAttrMul / 5.2),
+    round(CAttrMul / 6.6),
+    -round(CAttrMul / 1.0),
+    -round(CAttrMul / 1.2),
+    -round(CAttrMul / 1.6),
+    -round(CAttrMul / 2.2),
+    -round(CAttrMul / 3.0),
+    -round(CAttrMul / 4.0),
+    -round(CAttrMul / 5.2),
+    -round(CAttrMul / 6.6)
   );
 
 
@@ -50,7 +50,7 @@ const
     i, j, k, b, s1, s2: Integer;
     w: Word;
     chunkIndex, chunkAttrs: TIntegerDynArray;
-    StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount, FrameLength, SampleRate: Integer;
+    StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount, FrameLength, SampleRate, ChunkBlend: Integer;
     Chunks: TSmallIntDynArray2;
     memStream: TMemoryStream;
   begin
@@ -64,6 +64,21 @@ const
         ChunkBitDepth := ASourceStream.ReadByte;
         ChunkSize := ASourceStream.ReadByte;
         SampleRate := ASourceStream.ReadDWord;
+        ChunkBlend := SampleRate shr 24;
+        SampleRate := SampleRate and $ffffff;
+
+        if memStream.Position = 0 then
+        begin
+          writeln('StreamVersion = ', StreamVersion);
+          writeln('ChannelCount = ', ChannelCount);
+          writeln('ChunkCount = ', ChunkCount);
+          writeln('ChunkBitDepth = ', ChunkBitDepth);
+          writeln('ChunkSize = ', ChunkSize);
+          writeln('SampleRate = ', SampleRate);
+          writeln('ChunkBlend = ', ChunkBlend);
+        end;
+
+        Assert(ChunkBlend = 0, 'ChunkBlend not supported');
 
         SetLength(Chunks, ChunkCount, ChunkSize);
 

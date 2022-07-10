@@ -9,8 +9,9 @@
         <Filename Value="decoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <CursorPos X="40" Y="6"/>
-        <UsageCount Value="32"/>
+        <TopLine Value="57"/>
+        <CursorPos X="16" Y="78"/>
+        <UsageCount Value="34"/>
         <Loaded Value="True"/>
       </Unit>
       <Unit>
@@ -19,15 +20,11 @@
         <EditorIndex Value="1"/>
         <TopLine Value="13"/>
         <CursorPos X="19" Y="62"/>
-        <UsageCount Value="32"/>
+        <UsageCount Value="34"/>
         <Loaded Value="True"/>
       </Unit>
     </Units>
-    <JumpHistory HistoryIndex="28">
-      <Position>
-        <Filename Value="decoder.lpr"/>
-        <Caret Line="86" TopLine="46"/>
-      </Position>
+    <JumpHistory HistoryIndex="29">
       <Position>
         <Filename Value="decoder.lpr"/>
         <Caret Line="79" TopLine="46"/>
@@ -139,6 +136,14 @@
       <Position>
         <Filename Value="decoder.lpr"/>
         <Caret Line="109" Column="42" TopLine="47"/>
+      </Position>
+      <Position>
+        <Filename Value="decoder.lpr"/>
+        <Caret Line="7"/>
+      </Position>
+      <Position>
+        <Filename Value="decoder.lpr"/>
+        <Caret Line="12" Column="26"/>
       </Position>
     </JumpHistory>
     <RunParams>

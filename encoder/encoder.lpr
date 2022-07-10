@@ -9,8 +9,8 @@ const
   C1Freq = 32.703125;
   MaxChunksPerFrame = 4096;
   FrameLength = 10000; // im ms. if changed, adjust CLZRatio in PrepareFrames
-  StreamVersion = 0;
-  MaxAttenuation = 6;
+  StreamVersion = 1;
+  MaxAttenuation = 8;
 
 type
   TEncoder = class;
@@ -623,7 +623,8 @@ begin
   AStream.WriteWord(w and $ffff);
   w := (encoder.ChunkSize shl 8) or encoder.ChunkBitDepth;
   AStream.WriteWord(w and $ffff);
-  AStream.WriteDWord(encoder.SampleRate);
+  w := (encoder.ChunkBlend shl 24) or encoder.SampleRate;
+  AStream.WriteDWord(w and $ffffffff);
 
   cl := reducedChunks;
   if cl.Count = 0 then
@@ -1059,7 +1060,7 @@ begin
   ChunkSize := 4;
   ReduceBassBand := True;
   TrebleBoost := False;
-  VariableFrameSizeRatio := 0.0;
+  VariableFrameSizeRatio := 1.0;
   ChunkBlend := 0;
 
   ChunksPerFrame := MaxChunksPerFrame;
@@ -1207,11 +1208,16 @@ end;
 
 class function TEncoder.makeOutputSample(smp: Double; OutBitDepth, Attenuation: Integer; Negative: Boolean): SmallInt;
 var
-  obd: Integer;
+  i, obd: Integer;
   smp16: SmallInt;
+  coeff: Double;
 begin
+  coeff := 1.0;
+  for i := 0 to Attenuation do
+    coeff += i * 0.2;
+
   obd := (1 shl (OutBitDepth - 1));
-  smp16 := round(smp * obd * (1 + Attenuation));
+  smp16 := round(smp * obd * coeff);
   if Negative then smp16 := -smp16;
   smp16 := EnsureRange(smp16, -obd + 1, obd - 1);
   Result := smp16;
@@ -1219,10 +1225,15 @@ end;
 
 class function TEncoder.makeFloatSample(smp: SmallInt; OutBitDepth, Attenuation: Integer; Negative: Boolean): Double;
 var
-  obd: Integer;
+  i: Integer;
   smp16: SmallInt;
+  obd, coeff: Double;
 begin
-  obd := (1 shl (OutBitDepth - 1)) * (1 + Attenuation);
+  coeff := 1.0;
+  for i := 0 to Attenuation do
+    coeff += i * 0.2;
+
+  obd := (1 shl (OutBitDepth - 1)) * coeff;
   smp16 := smp;
   if Negative then smp16 := -smp16;
   Result := smp16 / obd;
@@ -1232,15 +1243,18 @@ end;
 class function TEncoder.ComputeAttenuation(chunkSz: Integer; const samples: TDoubleDynArray): Integer;
 var
   i, hiSmp: Integer;
+  coeff: Double;
 begin
   hiSmp := 0;
   for i := 0 to chunkSz - 1 do
     hiSmp := max(hiSmp, ceil(abs(samples[i] * High(SmallInt))));
 
   Result := 1;
+  coeff := 1.0;
   repeat
-    Inc(Result)
-  until (hiSmp * Result > High(SmallInt)) or (Result > MaxAttenuation);
+    coeff += Result * 0.2;
+    Inc(Result);
+  until (hiSmp * coeff > High(SmallInt)) or (Result > MaxAttenuation);
   Dec(Result, 2);
 end;
 
@@ -1493,7 +1507,7 @@ begin
     begin
       WriteLn('Usage: ', ExtractFileName(ParamStr(0)) + ' <source file> <dest file> [options]');
       Writeln('Main options:');
-      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-br320"');
+      WriteLn(#9'-br'#9'encoder bit rate in kilobits/second; example: "-br250"');
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); default: "-vfr1.0"');
