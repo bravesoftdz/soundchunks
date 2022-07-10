@@ -8,7 +8,6 @@ const
   BandCount = 1;
   C1Freq = 32.703125;
   MaxChunksPerFrame = 4096;
-  FrameLength = 10000; // im ms. if changed, adjust CLZRatio in PrepareFrames
   StreamVersion = 1;
   MaxAttenuation = 8;
 
@@ -120,6 +119,7 @@ type
     VariableFrameSizeRatio: Double;
     TrebleBoost: Boolean;
     ChunkBlend: Integer;
+    FrameLength: Double;
 
     ChannelCount: Integer;
     SampleRate: Integer;
@@ -865,7 +865,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.92;
+  CLZRatio = 0.83;
 var
   j, i, k, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -1062,6 +1062,7 @@ begin
   TrebleBoost := False;
   VariableFrameSizeRatio := 1.0;
   ChunkBlend := 0;
+  FrameLength := 4000; // in ms
 
   ChunksPerFrame := MaxChunksPerFrame;
   BandTransFactor := 1 / 256;
@@ -1511,6 +1512,8 @@ begin
       WriteLn(#9'-lc'#9'bass cutoff frequency');
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); default: "-vfr1.0"');
+      WriteLn(#9'-fl'#9'(Average) frame length in milliseconds; default: "-fl4000"');
+
       WriteLn(#9'-v'#9'verbose mode');
       Writeln('Development options:');
       WriteLn(#9'-cs'#9'chunk size');
@@ -1533,6 +1536,7 @@ begin
       enc.LowCut := ParamValue('-lc', enc.LowCut);
       enc.HighCut := ParamValue('-hc', enc.HighCut);
       enc.VariableFrameSizeRatio :=  EnsureRange(ParamValue('-vfr', enc.VariableFrameSizeRatio), 0.0, 1.0);
+      enc.FrameLength := Max(ParamValue('-fl', enc.FrameLength), 1.0);
       enc.ChunkBitDepth := EnsureRange(round(ParamValue('-cbd', enc.ChunkBitDepth)), 1, 16);
       enc.ChunkSize := round(ParamValue('-cs', enc.ChunkSize));
       enc.ChunksPerFrame := EnsureRange(round(ParamValue('-cpf', enc.ChunksPerFrame)), 256, MaxChunksPerFrame);
@@ -1544,6 +1548,7 @@ begin
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
       WriteLn('HighCut = ', FloatToStr(enc.HighCut));
       WriteLn('VariableFrameSizeRatio = ', FloatToStr(enc.VariableFrameSizeRatio));
+      WriteLn('FrameLength = ', enc.FrameLength:0:0);
       if enc.Verbose then
       begin
         WriteLn('ChunkSize = ', enc.ChunkSize);
