@@ -4,6 +4,9 @@ uses Types, SysUtils, Classes, Math, extern;
 
 const
   CAttrMul = round((High(SmallInt) + 1) * (High(SmallInt) / 2047));
+  CMaxAttenuation = 8;
+
+var
   CAttrLookup : array[0 .. 15] of Integer = (
     round(CAttrMul / 1.0),
     round(CAttrMul / 1.2),
@@ -50,9 +53,11 @@ const
     i, j, k, b, s1, s2: Integer;
     w: Word;
     chunkIndex, chunkAttrs: TIntegerDynArray;
-    StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount, FrameLength, SampleRate, ChunkBlend: Integer;
+    StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount: Integer;
+    FrameLength, SampleRate, ChunkBlend, AttenuationDivider: Integer;
     Chunks: TSmallIntDynArray2;
     memStream: TMemoryStream;
+    law, lawAcc: Double;
   begin
     memStream := TMemoryStream.Create;
     try
@@ -66,6 +71,21 @@ const
         SampleRate := ASourceStream.ReadDWord;
         ChunkBlend := SampleRate shr 24;
         SampleRate := SampleRate and $ffffff;
+
+        if StreamVersion > 1 then
+        begin
+          AttenuationDivider := ASourceStream.ReadWord;
+
+          law := 1.0 / AttenuationDivider;
+          lawAcc := 1.0;
+          for i := 0 to CMaxAttenuation - 1 do
+          begin
+            lawAcc += law * i;
+
+            CAttrLookup[i] := round(CAttrMul / lawAcc);
+            CAttrLookup[i + CMaxAttenuation] := -round(CAttrMul / lawAcc);
+          end;
+        end;
 
         if memStream.Position = 0 then
         begin
