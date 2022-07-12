@@ -36,7 +36,7 @@ type
     frame: TFrame;
     reducedChunk: TChunk;
 
-    channel, index, bandIndex: Integer;
+    channel, index, bandIndex, useCount: Integer;
     underSample: Integer;
     dstNegative: Boolean;
     dstAttenuation: Integer;
@@ -152,6 +152,7 @@ type
     class function ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
+    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TANNFloatDynArray): Double; overload;
     class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double; overload;
     class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double; overload;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
@@ -518,19 +519,21 @@ type
 
   TCountIndexList = specialize TFPGObjectList<TCountIndex>;
 
-function CompareCountInvIndex (const Item1, Item2: TCountIndex): Integer;
+function CompareCountInvIndex(const Item1, Item2: TCountIndex): Integer;
 begin
   Result := CompareValue(Item2.Count, Item1.Count);
 end;
 
-function CompareValueInvIndex (const Item1, Item2: TCountIndex): Integer;
+function CompareChunkUseCount(const Item1, Item2: TChunk): Integer;
 begin
-  Result := CompareValue(Item2.Value, Item1.Value);
+  Result := CompareValue(Item1.useCount, Item2.useCount);
 end;
 
 procedure TFrame.KMeansReduce;
+const
+  CBucketSize = 64;
 var
-  i, j, k, prec, colCount, clusterCount: Integer;
+  i, j, prec, colCount, clusterCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
@@ -540,11 +543,14 @@ var
   CIList: TCountIndexList;
   CIInv: TIntegerDynArray;
 
-  best: TANNFloat;
+  maxAttenuationLaw, epsilon: TANNFloat;
   bestIdx: Integer;
   tmp: TANNFloatDynArray2;
   tmp2: TANNFloatDynArray;
   KDT: PANNkdtree;
+
+  idxs: array[0 .. CBucketSize - 1] of Integer;
+  errs: array[0 .. CBucketSize - 1] of TANNFloat;
 begin
   prec := encoder.Precision;
 
@@ -559,7 +565,7 @@ begin
 
   if (prec > 0) and (chunkRefs.Count > clusterCount) then
   begin
-    // usual chunk reduction using K-Means
+    // usual chunk reduction using j-Means
 
     if encoder.Verbose then
       WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
@@ -591,7 +597,7 @@ begin
       SetLength(centroid, encoder.chunkSize);
 
       reducedChunks.Clear;
-      reducedChunks.Capacity := encoder.ChunksPerFrame;
+      reducedChunks.Capacity := clusterCount;
       for i := 0 to clusterCount - 1 do
       begin
         chunk := TChunk.Create(Self, i, -1, 1, nil);
@@ -611,29 +617,51 @@ begin
 
       SetLength(tmp, clusterCount * CMaxAttenuation * 2 {Negative}, encoder.chunkSize);
       SetLength(tmp2, encoder.chunkSize);
-      for j := 0 to high(tmp) do
-        for k := 0 to encoder.ChunkSize - 1 do
-          tmp[j, k] := TEncoder.makeFloatSample(reducedChunks[(j shr 1) div CMaxAttenuation].dstData[k], encoder.ChunkBitDepth, (j shr 1) mod CMaxAttenuation, j and 1 <> 0, AttenuationLaw);
+      for i := 0 to high(tmp) do
+        for j := 0 to encoder.ChunkSize - 1 do
+          tmp[i, j] := TEncoder.makeFloatSample(reducedChunks[(i shr 1) div CMaxAttenuation].dstData[j], encoder.ChunkBitDepth, (i shr 1) mod CMaxAttenuation, i and 1 <> 0, AttenuationLaw);
 
-      KDT := ann_kdtree_create(@tmp[0], Length(tmp), encoder.ChunkSize, 1, ANN_KD_SUGGEST);
+      maxAttenuationLaw := 1.0;
+      for i := 0 to CMaxAttenuation - 1 do
+        maxAttenuationLaw += i * AttenuationLaw;
+      epsilon := max(1.0 / ((1 shl encoder.ChunkBitDepth) * maxAttenuationLaw), 1.0 / high(SmallInt));
 
-      for i := 0 to chunkRefs.Count - 1 do
-      begin
+      KDT := ann_kdtree_create(@tmp[0], Length(tmp), encoder.ChunkSize, 1, ANN_KD_STD);
+      try
+        for i := 0 to chunkRefs.Count - 1 do
+        begin
 {$if true}
-        for k := 0 to encoder.ChunkSize - 1 do
-          tmp2[k] := chunkRefs[i].srcData[k];
+          for j := 0 to encoder.ChunkSize - 1 do
+            tmp2[j] := chunkRefs[i].srcData[j];
 
-        bestIdx := ann_kdtree_search(KDT, @tmp2[0], 0.0, @best);
+          ann_kdtree_pri_search_multi(KDT, @idxs[0], @errs[0], CBucketSize, @tmp2[0], 0.0);
 
-        chunkRefs[i].dstNegative := bestIdx and 1 <> 0;
-        chunkRefs[i].dstAttenuation := (bestIdx shr 1) mod CMaxAttenuation;
-        chunkRefs[i].reducedChunk := reducedChunks[(bestIdx shr 1) div CMaxAttenuation];
+          bestIdx := idxs[0];
+          for j := 0 to CBucketSize - 1 do
+            if InRange(idxs[j], 0, bestIdx - 1) and SameValue(sqrt(errs[0] / encoder.ChunkSize), sqrt(errs[j] / encoder.ChunkSize), epsilon) then
+              bestIdx := idxs[j];
+
+          chunkRefs[i].dstNegative := bestIdx and 1 <> 0;
+          chunkRefs[i].dstAttenuation := (bestIdx shr 1) mod CMaxAttenuation;
+          chunkRefs[i].reducedChunk := reducedChunks[(bestIdx shr 1) div CMaxAttenuation];
 {$else}
-        chunkRefs[i].reducedChunk := reducedChunks[CIInv[Clusters[i]]];
+          chunkRefs[i].reducedChunk := reducedChunks[CIInv[Clusters[i]]];
 {$ifend}
+
+          Inc(chunkRefs[i].reducedChunk.useCount);
+        end;
+      finally
+        ann_kdtree_destroy(KDT);
       end;
 
-      ann_kdtree_destroy(KDT);
+      for i := reducedChunks.Count - 1 downto 0 do
+        if reducedChunks[i].useCount = 0 then
+           reducedChunks.Delete(i);
+
+      reducedChunks.Sort(@CompareChunkUseCount);
+
+      for i := 0 to reducedChunks.Count - 1 do
+        reducedChunks[i].index := i;
     finally
       CIList.Free;
     end;
@@ -1403,6 +1431,18 @@ begin
   end;
 end;
 
+class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TANNFloatDynArray): Double;
+var
+  i: Integer;
+begin
+  Result := 0.0;
+
+  for i := firstCoeff to lastCoeff do
+    Result += sqr(dctA[i] - dctB[i]);
+
+  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
+end;
+
 class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
 var
   i: Integer;
@@ -1412,7 +1452,7 @@ begin
   for i := firstCoeff to lastCoeff do
     Result += sqr(dctA[i] - dctB[i]);
 
-  Result := sqrt(Result) / (lastCoeff - firstCoeff + 1);
+  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
 end;
 
 class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double;
@@ -1424,7 +1464,7 @@ begin
   for i := firstCoeff to lastCoeff do
     Result += sqr((dctA[i] - dctB[i]) / High(SmallInt));
 
-  Result := sqrt(Result) / (lastCoeff - firstCoeff + 1);
+  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
 end;
 
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
@@ -1480,7 +1520,7 @@ begin
   //rr := ComputeDCT(len, rr);
   //rt := ComputeDCT(len, rt);
 
-  Result := CompareEuclidean(0, len - 1, rr, rt) * length(smpRef);
+  Result := CompareEuclidean(0, len - 1, rr, rt);
 end;
 
 class procedure TEncoder.createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
