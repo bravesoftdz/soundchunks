@@ -7,7 +7,7 @@ const
   CMaxAttenuation = 8;
 
 var
-  CAttrLookup : array[0 .. 15] of Integer = (
+  CAttrLookup : array[0 .. CMaxAttenuation * 2 - 1] of Integer = (
     round(CAttrMul / 1.0),
     round(CAttrMul / 1.2),
     round(CAttrMul / 1.6),
