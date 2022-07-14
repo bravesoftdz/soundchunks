@@ -8,7 +8,7 @@ const
   CBandCount = 1;
   C1Freq = 32.703125;
   CMaxChunksPerFrame = 4096;
-  CStreamVersion = 2;
+  CStreamVersion = 0;
   CMaxAttenuation = 16;
 
 
@@ -697,9 +697,9 @@ const
   CVariableCodingHeaderSize = 2;
   CVariableCodingBlockSize = 3;
 var
-  i, j, k, s1, s2, vcbsCnt, prevVcbsCnt, codeSize, qs: Integer;
+  i, j, k, s1, s2, vcbsCnt, prevVcbsCnt, codeSize, bitCnt: Integer;
   code, w: Integer;
-  q: UInt64;
+  bits: Cardinal;
   cl: TChunkList;
 begin
   Assert(reducedChunks.Count <= CMaxChunksPerFrame);
@@ -725,6 +725,10 @@ begin
     s2 := cl[j * 2 + 1].dstAttenuation;
     AStream.WriteByte((s1 shl 4) or s2);
   end;
+
+  if Odd(cl.Count) then
+    AStream.WriteByte(cl[cl.Count - 1].dstAttenuation shl 4);
+
 
   case encoder.ChunkBitDepth of
     8:
@@ -752,8 +756,8 @@ begin
 
     AStream.WriteDWord(cl.Count div encoder.ChannelCount);
 
-    qs := 0;
-    q := 0;
+    bitCnt := 0;
+    bits := 0;
     for j := 0 to cl.Count - 1 do
     begin
       vcbsCnt := IfThen(cl[j].reducedChunk.index = 0, 0, BsrWord(cl[j].reducedChunk.index) div CVariableCodingBlockSize);
@@ -767,41 +771,43 @@ begin
       code := 0;
       codeSize := 0;
 
-      code := (code shl 1) or Ord(cl[j].dstNegative);
+      code := code or (Ord(cl[j].dstNegative) shl codeSize);
       codeSize += 1;
 
       if vcbsCnt = prevVcbsCnt then
       begin
-        code := (code shl 1) or 0;
+        code := code or (0 shl codeSize);
         codeSize += 1;
       end
       else
       begin
-        code := (code shl 1) or 1;
+        code := code or (1 shl codeSize);
         codeSize += 1;
-        code := (code shl CVariableCodingHeaderSize) or vcbsCnt;
+        code := code or (vcbsCnt shl codeSize);
         codeSize += CVariableCodingHeaderSize;
       end;
 
-      for k := 0 to vcbsCnt do
+      for k := vcbsCnt downto 0 do
       begin
-        code := (code shl CVariableCodingBlockSize) or ((cl[j].reducedChunk.index shr (k * CVariableCodingBlockSize)) and ((1 shl CVariableCodingBlockSize) - 1));
+        code := code or (((cl[j].reducedChunk.index shr (k * CVariableCodingBlockSize)) and ((1 shl CVariableCodingBlockSize) - 1)) shl codeSize);
         codeSize += CVariableCodingBlockSize;
       end;
 
-      q := (q shl codeSize) or code;
-      qs += codeSize;
-      if qs >= 16 then
+      bits := bits or (code shl bitCnt);
+      bitCnt += codeSize;
+      if bitCnt >= 16 then
       begin
-        qs -= 16;
-        AStream.WriteWord((q shr qs) and $ffff);
+        bitCnt -= 16;
+        AStream.WriteWord(bits and $ffff);
+        bits := bits shr 16;
       end;
     end;
 
-    if qs > 0 then
+    if bitCnt > 0 then
     begin
-      Assert(qs <= 16);
-      AStream.WriteWord((q and ((1 shl qs) - 1)) and $ffff);
+      Assert(bitCnt <= 16);
+      AStream.WriteWord(bits and $ffff);
+      bits := bits shr 16;
     end;
   end;
 end;

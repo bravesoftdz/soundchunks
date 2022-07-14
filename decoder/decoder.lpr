@@ -4,27 +4,12 @@ uses Types, SysUtils, Classes, Math, extern;
 
 const
   CAttrMul = round((High(SmallInt) + 1) * (High(SmallInt) / 2047));
-  CMaxAttenuation = 8;
+  CMaxAttenuation = 16;
+  CVariableCodingHeaderSize = 2;
+  CVariableCodingBlockSize = 3;
 
 var
-  CAttrLookup : array[0 .. CMaxAttenuation * 2 - 1] of Integer = (
-    round(CAttrMul / 1.0),
-    round(CAttrMul / 1.2),
-    round(CAttrMul / 1.6),
-    round(CAttrMul / 2.2),
-    round(CAttrMul / 3.0),
-    round(CAttrMul / 4.0),
-    round(CAttrMul / 5.2),
-    round(CAttrMul / 6.6),
-    -round(CAttrMul / 1.0),
-    -round(CAttrMul / 1.2),
-    -round(CAttrMul / 1.6),
-    -round(CAttrMul / 2.2),
-    -round(CAttrMul / 3.0),
-    -round(CAttrMul / 4.0),
-    -round(CAttrMul / 5.2),
-    -round(CAttrMul / 6.6)
-  );
+  CAttrLookup : array[Boolean {negative?}, 0 .. CMaxAttenuation - 1] of Integer;
 
 
   function CreateWAVHeader(channels: word; resolution: word; rate, size: longint): TWavHeader;
@@ -50,19 +35,33 @@ var
 
   procedure GSCUnpack(ASourceStream, ADestStream: TStream);
   var
-    i, j, k, b, s1, s2: Integer;
+    i, j, k, b, s1, s2, bitCount, variableCodingHeader: Integer;
     w: Word;
-    chunkIndex, chunkAttrs: TIntegerDynArray;
+    chunkIndex: TIntegerDynArray;
+    chunkNegative: TBooleanDynArray;
     StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount: Integer;
     FrameLength, SampleRate, ChunkBlend, AttenuationDivider: Integer;
     Chunks: TSmallIntDynArray2;
+    Attenuations: TByteDynArray;
     memStream: TMemoryStream;
     law, lawAcc: Double;
+    bits: Cardinal;
+
+    function GetBits(ABitCount: Integer): Integer;
+    begin
+      Assert(ABitCount <= bitCount);
+      Result := bits and ((1 shl ABitCount) - 1);
+      bits := bits shr ABitCount;
+      bitCount -= ABitCount;
+    end;
+
   begin
     memStream := TMemoryStream.Create;
     try
       while ASourceStream.Position <> ASourceStream.Size do
       begin
+        // parse header
+
         StreamVersion := ASourceStream.ReadByte;
         ChannelCount := ASourceStream.ReadByte;
         ChunkCount := ASourceStream.ReadWord and $1fff;
@@ -71,36 +70,51 @@ var
         SampleRate := ASourceStream.ReadDWord;
         ChunkBlend := SampleRate shr 24;
         SampleRate := SampleRate and $ffffff;
+        AttenuationDivider := ASourceStream.ReadWord;
 
-        if StreamVersion > 1 then
+        // compute attenuation law from AttenuationDivider
+
+        law := 1.0 / AttenuationDivider;
+        lawAcc := 1.0;
+        for i := 0 to CMaxAttenuation - 1 do
         begin
-          AttenuationDivider := ASourceStream.ReadWord;
+          lawAcc += law * i;
 
-          law := 1.0 / AttenuationDivider;
-          lawAcc := 1.0;
-          for i := 0 to CMaxAttenuation - 1 do
-          begin
-            lawAcc += law * i;
-
-            CAttrLookup[i] := round(CAttrMul / lawAcc);
-            CAttrLookup[i + CMaxAttenuation] := -round(CAttrMul / lawAcc);
-          end;
+          CAttrLookup[False, i] := round(CAttrMul / lawAcc);
+          CAttrLookup[True, i] := -round(CAttrMul / lawAcc);
         end;
 
         if memStream.Position = 0 then
         begin
           writeln('StreamVersion = ', StreamVersion);
+          writeln('SampleRate = ', SampleRate);
           writeln('ChannelCount = ', ChannelCount);
-          writeln('ChunkCount = ', ChunkCount);
           writeln('ChunkBitDepth = ', ChunkBitDepth);
           writeln('ChunkSize = ', ChunkSize);
-          writeln('SampleRate = ', SampleRate);
           writeln('ChunkBlend = ', ChunkBlend);
         end;
 
         Assert(ChunkBlend = 0, 'ChunkBlend not supported');
 
         SetLength(Chunks, ChunkCount, ChunkSize);
+        SetLength(Attenuations, ChunkCount);
+
+        // depack Attenuations
+
+        for i := 0 to ChunkCount div 2 - 1 do
+        begin
+          b := ASourceStream.ReadByte;
+          Attenuations[i * 2 + 0] := (b and $f0) shr 4;
+          Attenuations[i * 2 + 1] := (b and $0f);
+        end;
+
+        if Odd(ChunkCount) then
+        begin
+          b := ASourceStream.ReadByte;
+          Attenuations[ChunkCount - 1] := (b and $f0) shr 4;
+        end;
+
+        // depack Chunks
 
         case ChunkBitDepth of
           8:
@@ -125,24 +139,49 @@ var
             Assert(False, 'ChunkBitDepth not supported');
         end;
 
+        // depack Frames
+
         FrameLength := ASourceStream.ReadDWord;
 
         SetLength(chunkIndex, ChannelCount);
-        SetLength(chunkAttrs, ChannelCount);
+        SetLength(chunkNegative, ChannelCount);
 
+        bits := 0;
+        bitCount := 0;
+        variableCodingHeader := -1;
         for i := 0 to FrameLength - 1 do
         begin
           for k := 0 to ChannelCount - 1 do
           begin
-            w := ASourceStream.ReadWord;
-            chunkIndex[k] := w and $fff;
-            chunkAttrs[k] := w shr 12;
+            if (bitCount < 16) and (ASourceStream.Position < ASourceStream.Size) then
+            begin
+              w := ASourceStream.ReadWord;
+              bits := bits or (w shl bitCount);
+              bitCount += 16;
+            end;
+
+            chunkNegative[k] := GetBits(1) <> 0;
+
+            if GetBits(1) <> 0 then // has new header?
+              variableCodingHeader := GetBits(CVariableCodingHeaderSize);
+
+            chunkIndex[k] := 0;
+            for j := 0 to variableCodingHeader do
+              chunkIndex[k] := (chunkIndex[k] shl CVariableCodingBlockSize) or GetBits(CVariableCodingBlockSize);
           end;
 
           for j := 0 to ChunkSize - 1 do
             for k := 0 to ChannelCount - 1 do
-              memStream.WriteWord(Cardinal(CAttrLookup[chunkAttrs[k]] * Chunks[chunkIndex[k], j]) shr 15);
+              memStream.WriteWord(Cardinal(CAttrLookup[chunkNegative[k], Attenuations[chunkIndex[k]]] * Chunks[chunkIndex[k], j]) shr 15);
         end;
+
+        if bitCount >= 16 then // fixup potentially reading 1 spurious word
+        begin
+          ASourceStream.Seek(-2, soCurrent);
+          bitCount -= 16;
+        end;
+
+        Assert(bitCount < 16);
       end;
 
       memStream.Seek(0, soFromBeginning);
@@ -157,7 +196,6 @@ var
 var
   gscFN, wavFN: String;
   inFS, outFS: TFileStream;
-  gscFS: TMemoryStream;
 begin
   if ParamCount = 0 then
   begin
@@ -174,15 +212,11 @@ begin
 
   inFS := TFileStream.Create(gscFN, fmOpenRead or fmShareDenyNone);
   outFS := TFileStream.Create(wavFN, fmCreate or fmShareDenyWrite);
-  gscFS := TMemoryStream.Create;
   try
-    LZCompress(inFS, False, True, gscFS);
-    gscFS.Position := 0;
-    GSCUnpack(gscFS, outFS);
+    GSCUnpack(inFS, outFS);
   finally
-    inFS.Free;
     outFS.Free;
-    gscFS.Free;
+    inFS.Free;
   end;
 end.
 
