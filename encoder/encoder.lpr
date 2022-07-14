@@ -9,7 +9,7 @@ const
   C1Freq = 32.703125;
   CMaxChunksPerFrame = 4096;
   CStreamVersion = 2;
-  CMaxAttenuation = 8;
+  CMaxAttenuation = 16;
 
 
 type
@@ -266,9 +266,9 @@ var
   i: Integer;
   data: TDoubleDynArray;
 begin
-  SetLength(data, Length(dstData));
+  SetLength(data, Length(srcData));
   for i := 0 to High(data) do
-    data[i] := dstData[i] / ((1 shl (frame.encoder.ChunkBitDepth - 1)) - 1);
+    data[i] := srcData[i] * IfThen(dstNegative, -1, 1);
   dct := TEncoder.ComputeDCT4(Length(data), data);
 end;
 
@@ -403,7 +403,7 @@ begin
 
     for j := 0 to frame.encoder.chunkSize - 1 do
     begin
-      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.dstAttenuation, chunk.dstNegative, frame.AttenuationLaw);
+      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.reducedChunk.dstAttenuation, chunk.dstNegative, frame.AttenuationLaw);
 
       for k := 0 to globalData^.underSample - 1 do
       begin
@@ -569,7 +569,6 @@ begin
     yakmo_get_centroids(Yakmo, @Centroids[0]);
     yakmo_destroy(Yakmo);
 
-
     CIList := TCountIndexList.Create;
     try
       for i := 0 to clusterCount - 1 do
@@ -598,11 +597,9 @@ begin
 
         CIInv[CIList[i].Index] := i;
 
-        centroid := TEncoder.ComputeDCT4(encoder.chunkSize, centroid);
-
-        SetLength(chunk.dstData, encoder.chunkSize);
-        for j := 0 to encoder.chunkSize - 1 do
-          chunk.dstData[j] := EnsureRange(round(centroid[j] * ((1 shl (encoder.ChunkBitDepth - 1)) - 1)), -(1 shl (encoder.ChunkBitDepth - 1)), (1 shl (encoder.ChunkBitDepth - 1)) - 1);
+        chunk.srcData := TEncoder.ComputeDCT4(encoder.chunkSize, centroid);
+        chunk.ComputeAttenuationAndSign;
+        chunk.MakeDstData;
   	  end;
 
       for i := 0 to chunkRefs.Count - 1 do
@@ -624,7 +621,9 @@ begin
 
       reducedChunks.Add(chunk);
 
-      chunk.dstData := Copy(chunkRefs[i].dstData);
+      chunk.srcData := Copy(chunkRefs[i].srcData);
+      chunk.ComputeAttenuationAndSign;
+      chunk.MakeDstData;
     end;
 
     Centroids := Dataset;
@@ -647,12 +646,17 @@ var
   idxs: array[0 .. CBucketSize - 1] of Integer;
   errs: array[0 .. CBucketSize - 1] of TANNFloat;
 begin
-  SetLength(Dataset, reducedChunks.Count * CMaxAttenuation * 2 {Negative}, encoder.chunkSize);
+  SetLength(Dataset, reducedChunks.Count * 2 {Negative}, encoder.chunkSize);
   SetLength(chunk, encoder.chunkSize);
   for i := 0 to high(Dataset) do
     for j := 0 to encoder.ChunkSize - 1 do
-      Dataset[i, j] := TEncoder.makeFloatSample(reducedChunks[(i shr 1) mod reducedChunks.Count].dstData[j],
-        encoder.ChunkBitDepth, CMaxAttenuation - 1 - (i shr 1) div reducedChunks.Count, i and 1 <> 0, AttenuationLaw);
+      Dataset[i, j] := TEncoder.makeFloatSample(reducedChunks[i shr 1].dstData[j],
+        encoder.ChunkBitDepth, reducedChunks[i shr 1].dstAttenuation, i and 1 <> 0, AttenuationLaw);
+
+  maxAttenuationLaw := 1.0;
+  for j := 0 to CMaxAttenuation - 1 do
+    maxAttenuationLaw += j * AttenuationLaw;
+  epsilon := max(1.0 / ((1 shl encoder.ChunkBitDepth) * maxAttenuationLaw), 1.0 / high(SmallInt));
 
   KDT := ann_kdtree_create(@Dataset[0], Length(Dataset), encoder.ChunkSize, 1, ANN_KD_STD);
   try
@@ -660,11 +664,6 @@ begin
     begin
       for j := 0 to encoder.ChunkSize - 1 do
         chunk[j] := chunkRefs[i].srcData[j];
-
-      maxAttenuationLaw := 1.0;
-      for j := 0 to chunkRefs[j].dstAttenuation - 1 do
-        maxAttenuationLaw += j * AttenuationLaw;
-      epsilon := max(1.0 / ((1 shl encoder.ChunkBitDepth) * maxAttenuationLaw), 1.0 / high(SmallInt));
 
       ann_kdtree_pri_search_multi(KDT, @idxs[0], @errs[0], CBucketSize, @chunk[0], 0.0);
 
@@ -675,8 +674,7 @@ begin
           bestIdx := idxs[j];
 
       chunkRefs[i].dstNegative := bestIdx and 1 <> 0;
-      chunkRefs[i].dstAttenuation := CMaxAttenuation - 1 - (bestIdx shr 1) div reducedChunks.Count;
-      chunkRefs[i].reducedChunk := reducedChunks[(bestIdx shr 1) mod reducedChunks.Count];
+      chunkRefs[i].reducedChunk := reducedChunks[bestIdx shr 1];
 
       Inc(chunkRefs[i].reducedChunk.useCount);
     end;
@@ -699,7 +697,7 @@ const
   CVariableCodingHeaderSize = 2;
   CVariableCodingBlockSize = 3;
 var
-  i, j, k, s1, s2, vcbsCnt, codeSize, qs: Integer;
+  i, j, k, s1, s2, vcbsCnt, prevVcbsCnt, codeSize, qs: Integer;
   code, w: Integer;
   q: UInt64;
   cl: TChunkList;
@@ -720,6 +718,13 @@ begin
   cl := reducedChunks;
   if cl.Count = 0 then
     cl := chunkRefs;
+
+  for j := 0 to cl.Count div 2 - 1 do
+  begin
+    s1 := cl[j * 2 + 0].dstAttenuation;
+    s2 := cl[j * 2 + 1].dstAttenuation;
+    AStream.WriteByte((s1 shl 4) or s2);
+  end;
 
   case encoder.ChunkBitDepth of
     8:
@@ -751,32 +756,34 @@ begin
     q := 0;
     for j := 0 to cl.Count - 1 do
     begin
-      vcbsCnt := 0;
-      if cl[j].reducedChunk.index > 0 then
-        vcbsCnt := BsrWord(cl[j].reducedChunk.index) div CVariableCodingBlockSize + 1;
+      vcbsCnt := IfThen(cl[j].reducedChunk.index = 0, 0, BsrWord(cl[j].reducedChunk.index) div CVariableCodingBlockSize);
+
+      //writeln(cl[j].reducedChunk.index:5,vcbsCnt:3);
+
+      prevVcbsCnt := -1;
+      if j >= 1 then
+        prevVcbsCnt := IfThen(cl[j - 1].reducedChunk.index = 0, 0, BsrWord(cl[j - 1].reducedChunk.index) div CVariableCodingBlockSize);
 
       code := 0;
       codeSize := 0;
 
-      if (j >= encoder.ChannelCount) and (cl[j].dstNegative = cl[j - encoder.ChannelCount].dstNegative) and (cl[j].dstAttenuation = cl[j - encoder.ChannelCount].dstAttenuation) then
+      code := (code shl 1) or Ord(cl[j].dstNegative);
+      codeSize += 1;
+
+      if vcbsCnt = prevVcbsCnt then
       begin
-        code := (code shl 1) or 1;
+        code := (code shl 1) or 0;
         codeSize += 1;
       end
       else
       begin
-        code := (code shl 1) or 0;
+        code := (code shl 1) or 1;
         codeSize += 1;
-        code := (code shl 1) or Ord(cl[j].dstNegative);
-        codeSize += 1;
-        code := (code shl round(log2(CMaxAttenuation))) or cl[j].dstAttenuation;
-        codeSize += round(log2(CMaxAttenuation));
+        code := (code shl CVariableCodingHeaderSize) or vcbsCnt;
+        codeSize += CVariableCodingHeaderSize;
       end;
 
-      code := (code shl CVariableCodingHeaderSize) or vcbsCnt;
-      codeSize += CVariableCodingHeaderSize;
-
-      for k := 0 to vcbsCnt - 1 do
+      for k := 0 to vcbsCnt do
       begin
         code := (code shl CVariableCodingBlockSize) or ((cl[j].reducedChunk.index shr (k * CVariableCodingBlockSize)) and ((1 shl CVariableCodingBlockSize) - 1));
         codeSize += CVariableCodingBlockSize;
@@ -784,15 +791,18 @@ begin
 
       q := (q shl codeSize) or code;
       qs += codeSize;
-
-      if qs >= 32 then
+      if qs >= 16 then
       begin
-        qs -= 32;
-        AStream.WriteDWord(q shr qs);
+        qs -= 16;
+        AStream.WriteWord((q shr qs) and $ffff);
       end;
     end;
-    if qs >= 0 then
-      AStream.WriteDWord(q shl (32 - qs));
+
+    if qs > 0 then
+    begin
+      Assert(qs <= 16);
+      AStream.WriteWord((q and ((1 shl qs) - 1)) and $ffff);
+    end;
   end;
 end;
 
