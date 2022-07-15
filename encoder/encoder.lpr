@@ -166,7 +166,7 @@ type
 
     procedure Load;
     procedure SaveWAV;
-    procedure SaveGSC;
+    function SaveGSC: Double;
     procedure SaveStream(AStream: TStream);
     procedure SaveBandWAV(index: Integer; fn: String);
 
@@ -270,7 +270,7 @@ begin
   SetLength(data, Length(srcData));
   for i := 0 to High(data) do
     data[i] := srcData[i] * IfThen(dstNegative, -1, 1);
-  dct := TEncoder.ComputeDCT4(Length(data), data);
+  dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
 procedure TChunk.ComputeAttenuationAndSign;
@@ -564,11 +564,18 @@ begin
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids, clusterCount, colCount);
 
-    Yakmo := yakmo_create(clusterCount, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
-    yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
-    yakmo_train_on_data(Yakmo, @Clusters[0]);
-    yakmo_get_centroids(Yakmo, @Centroids[0]);
-    yakmo_destroy(Yakmo);
+    if True then
+    begin
+      Yakmo := yakmo_create(clusterCount, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
+      yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
+      yakmo_train_on_data(Yakmo, @Clusters[0]);
+      yakmo_get_centroids(Yakmo, @Centroids[0]);
+      yakmo_destroy(Yakmo);
+    end
+    else
+    begin
+      DoExternalSKLearn(Dataset, clusterCount, prec, False, encoder.Verbose, Clusters, Centroids);
+    end;
 
     CIList := TCountIndexList.Create;
     try
@@ -598,7 +605,7 @@ begin
 
         CIInv[CIList[i].Index] := i;
 
-        chunk.srcData := TEncoder.ComputeDCT4(encoder.chunkSize, centroid);
+        chunk.srcData := TEncoder.ComputeInvDCT(encoder.chunkSize, centroid);
         chunk.ComputeAttenuationAndSign;
         chunk.MakeDstData;
   	  end;
@@ -882,7 +889,7 @@ begin
   end;
 end;
 
-procedure TEncoder.SaveGSC;
+function TEncoder.SaveGSC: Double;
 var
   fs: TFileStream;
   cur: TMemoryStream;
@@ -900,8 +907,10 @@ begin
 
     fs.CopyFrom(cur, cur.Size);
 
+    Result := cur.size * (8 / 1024) / (SampleCount / SampleRate); // returns bitrate
+
     writeln('FinalByteSize = ', cur.Size);
-    writeln('FinalBitRate = ', round(cur.size * (8 / 1024) / (SampleCount / SampleRate)));
+    writeln('FinalBitRate = ', round(Result));
   finally
     fs.Free;
     cur.Free;
@@ -1639,7 +1648,7 @@ end;
 var
   enc: TEncoder;
   i: Integer;
-  dix, psy: double;
+  br, psy: double;
   s: String;
 begin
   try
@@ -1720,8 +1729,10 @@ begin
       if CBandCount > 1 then
         for i := 0 to CBandCount - 1 do
           enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
+
+      br := 0;
       if enc.Precision > 0 then
-        enc.SaveGSC;
+        br := enc.SaveGSC;
 
       //dix := enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
       //WriteLn('EAQUAL = ', FloatToStr(dix));
@@ -1729,7 +1740,7 @@ begin
       psy := enc.ComputePsyADelta(enc.srcData, enc.dstData);
       WriteLn('PsyADelta = ', FormatFloat(',0.0000000000', psy));
 
-      s := FloatToStr(dix) + ' ' + FormatFloat(',0.0000000000', psy) + ' ';
+      s := IntToStr(round(br)) + ' ' + FormatFloat(',0.00000', psy) + ' ';
       for i := 0 to ParamCount do s := s + ParamStr(i) + ' ';
       ShellExecute(0, 'open', 'cmd.exe', PChar('/c echo ' + s + ' >> ..\log.txt'), '', 0);
 
