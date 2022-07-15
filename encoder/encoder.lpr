@@ -10,7 +10,8 @@ const
   CMaxChunksPerFrame = 4096;
   CStreamVersion = 0;
   CMaxAttenuation = 16;
-
+  CVariableCodingHeaderSize = 2;
+  CVariableCodingBlockSize = 3;
 
 type
   TEncoder = class;
@@ -693,9 +694,6 @@ begin
 end;
 
 procedure TFrame.SaveStream(AStream: TStream);
-const
-  CVariableCodingHeaderSize = 2;
-  CVariableCodingBlockSize = 3;
 var
   i, j, k, s1, s2, vcbsCnt, prevVcbsCnt, codeSize, bitCnt: Integer;
   code, w: Integer;
@@ -1003,7 +1001,7 @@ procedure TEncoder.PrepareFrames;
   end;
 
 const
-  CLZRatio = 0.95;
+  CVariableCodingRatio = 0.8;
 var
   j, i, k, nextStart, psc, tentativeByteSize: Integer;
   frm: TFrame;
@@ -1038,19 +1036,19 @@ begin
 
   FrameCount := ceil(SampleCount / (SampleRate * (FrameLength / 1000)));
 
-  ChunksPerFrame := ChunksPerFrame shl 1;
+  Inc(ChunksPerFrame);
   repeat
-    ChunksPerFrame := ChunksPerFrame shr 1;
+    Dec(ChunksPerFrame);
 
     fixedCost := 0 {no header besides frame};
 
     bandCost := 0;
     for i := 0 to CBandCount - 1 do
-      bandCost += (SampleCount * ChannelCount * (Log2(ChunksPerFrame) + Log2(CMaxAttenuation) + 1 {dstNegative})) / (8 {bytes -> bits} * (ChunkSize - ChunkBlend) * bandData[i].underSample);
+      bandCost += (SampleCount * ChannelCount * (Log2(ChunksPerFrame) + (1 + CVariableCodingHeaderSize) + 1 {dstNegative})) / (8 {bytes -> bits} * (ChunkSize - ChunkBlend) * bandData[i].underSample);
 
-    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth / 8 + (3 * SizeOf(Word) + (1 + CBandCount) * SizeOf(Cardinal)) {frame header};
+    frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth / 8 + ChunksPerFrame * 4 / 8 + (4 * SizeOf(Word) + SizeOf(Cardinal) + CBandCount * SizeOf(Cardinal)) {frame header};
 
-    tentativeByteSize := Round((fixedCost + bandCost + FrameCount * frameCost) * CLZRatio);
+    tentativeByteSize := Round(fixedCost + bandCost * CVariableCodingRatio + FrameCount * frameCost);
 
   until (tentativeByteSize <= ProjectedByteSize) or (ChunksPerFrame <= 1);
 
