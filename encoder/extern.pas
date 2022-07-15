@@ -8,7 +8,7 @@ uses
   logger, Windows, Classes, SysUtils, Types, Process, strutils, math;
 
 type
-  TFloat = Double;
+  TFloat = Single;
 
   TFloatDynArray = array of TFloat;
   TFloatDynArray2 = array of TFloatDynArray;
@@ -87,11 +87,11 @@ function GenerateSVMLightFile(Dataset: TFloatDynArray2; Header: Boolean): String
 function GetSVMLightLine(index: Integer; lines: TStringList): TFloatDynArray;
 function GetSVMLightClusterCount(lines: TStringList): Integer;
 
-function yakmo_create(k: Cardinal; restartCount: Cardinal; maxIter: Integer; initType: Integer; initSeed: Integer; doNormalize: Integer; isVerbose: Integer): PYakmo; stdcall; external 'yakmo.dll';
-procedure yakmo_destroy(ay: PYakmo); stdcall; external 'yakmo.dll';
-procedure yakmo_load_train_data(ay: PYakmo; rowCount: Cardinal; colCount: Cardinal; dataset: PPFloat); stdcall; external 'yakmo.dll';
-procedure yakmo_train_on_data(ay: PYakmo; pointToCluster: PInteger); stdcall; external 'yakmo.dll';
-procedure yakmo_get_centroids(ay: PYakmo; centroids: PPFloat); stdcall; external 'yakmo.dll';
+function yakmo_create(k: Cardinal; restartCount: Cardinal; maxIter: Integer; initType: Integer; initSeed: Integer; doNormalize: Integer; isVerbose: Integer): PYakmo; stdcall; external 'yakmo_single.dll';
+procedure yakmo_destroy(ay: PYakmo); stdcall; external 'yakmo_single.dll';
+procedure yakmo_load_train_data(ay: PYakmo; rowCount: Cardinal; colCount: Cardinal; dataset: PPFloat); stdcall; external 'yakmo_single.dll';
+procedure yakmo_train_on_data(ay: PYakmo; pointToCluster: PInteger); stdcall; external 'yakmo_single.dll';
+procedure yakmo_get_centroids(ay: PYakmo; centroids: PPFloat); stdcall; external 'yakmo_single.dll';
 
 function ann_kdtree_create(pa: PPANNFloat; n, dd, bs: Integer; split: TANNsplitRule): PANNkdtree; external 'ANN.dll';
 procedure ann_kdtree_destroy(akd: PANNkdtree); external 'ANN.dll';
