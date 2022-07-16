@@ -9,8 +9,8 @@
         <Filename Value="decoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="123"/>
-        <CursorPos X="81" Y="156"/>
+        <TopLine Value="173"/>
+        <CursorPos X="21" Y="235"/>
         <UsageCount Value="35"/>
         <Loaded Value="True"/>
       </Unit>
@@ -31,11 +31,7 @@
         <Loaded Value="True"/>
       </Unit>
     </Units>
-    <JumpHistory HistoryIndex="28">
-      <Position>
-        <Filename Value="decoder.lpr"/>
-        <Caret Line="65" TopLine="32"/>
-      </Position>
+    <JumpHistory HistoryIndex="29">
       <Position>
         <Filename Value="decoder.lpr"/>
         <Caret Line="154" Column="28" TopLine="125"/>
@@ -148,6 +144,14 @@
         <Filename Value="decoder.lpr"/>
         <Caret Line="181" Column="25" TopLine="147"/>
       </Position>
+      <Position>
+        <Filename Value="decoder.lpr"/>
+        <Caret Line="172" Column="24" TopLine="124"/>
+      </Position>
+      <Position>
+        <Filename Value="decoder.lpr"/>
+        <Caret Line="188" Column="109" TopLine="136"/>
+      </Position>
     </JumpHistory>
     <RunParams>
       <FormatVersion Value="2"/>
@@ -170,7 +174,6 @@
         <Item4 Value="..\mo.gsc"/>
         <Item5 Value="..\mo2.gsc"/>
       </List>
-      <List Name="WorkingDirectory" Type="File" Count="1"/>
     </HistoryLists>
   </ProjectSession>
   <Debugging>

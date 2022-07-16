@@ -35,10 +35,10 @@ var
 
   procedure GSCUnpack(ASourceStream, ADestStream: TStream);
   var
-    i, j, k, b, s1, s2, bitCount, variableCodingHeader: Integer;
+    i, j, k, b, s1, s2, bitCount, variableCodingHeader, attr, chunkSmp: Integer;
     w: Word;
     chunkIndex: TIntegerDynArray;
-    chunkNegative: TBooleanDynArray;
+    chunkNegative, chunkReversed: TBooleanDynArray;
     StreamVersion, ChannelCount, ChunkBitDepth, ChunkSize, ChunkCount: Integer;
     FrameLength, SampleRate, ChunkBlend, AttenuationDivider: Integer;
     Chunks: TSmallIntDynArray2;
@@ -53,6 +53,16 @@ var
       Result := bits and ((1 shl ABitCount) - 1);
       bits := bits shr ABitCount;
       bitCount -= ABitCount;
+    end;
+
+    procedure FillBits;
+    begin
+      if (bitCount < 16) and (ASourceStream.Position < ASourceStream.Size) then
+      begin
+        w := ASourceStream.ReadWord;
+        bits := bits or (w shl bitCount);
+        bitCount += 16;
+      end;
     end;
 
   begin
@@ -145,6 +155,7 @@ var
 
         SetLength(chunkIndex, ChannelCount);
         SetLength(chunkNegative, ChannelCount);
+        SetLength(chunkReversed, ChannelCount);
 
         bits := 0;
         bitCount := 0;
@@ -153,17 +164,17 @@ var
         begin
           for k := 0 to ChannelCount - 1 do
           begin
-            if (bitCount < 16) and (ASourceStream.Position < ASourceStream.Size) then
-            begin
-              w := ASourceStream.ReadWord;
-              bits := bits or (w shl bitCount);
-              bitCount += 16;
-            end;
+            FillBits;
 
             chunkNegative[k] := GetBits(1) <> 0;
 
+            if StreamVersion > 0 then
+              chunkReversed[k] := GetBits(1) <> 0; // flag starting version 1
+
             if GetBits(1) <> 0 then // has new header?
               variableCodingHeader := GetBits(CVariableCodingHeaderSize);
+
+            FillBits;
 
             chunkIndex[k] := 0;
             for j := 0 to variableCodingHeader do
@@ -172,7 +183,12 @@ var
 
           for j := 0 to ChunkSize - 1 do
             for k := 0 to ChannelCount - 1 do
-              memStream.WriteWord(Cardinal(CAttrLookup[chunkNegative[k], Attenuations[chunkIndex[k]]] * Chunks[chunkIndex[k], j]) shr 15);
+            begin
+              attr := CAttrLookup[chunkNegative[k], Attenuations[chunkIndex[k]]];
+              chunkSmp := Chunks[chunkIndex[k], IfThen(chunkReversed[k], ChunkSize - 1 - j, j)];
+
+              memStream.WriteWord(Cardinal(attr * chunkSmp) shr 15);
+            end;
         end;
 
         if bitCount >= 16 then // fixup potentially reading 1 spurious word
@@ -196,6 +212,7 @@ var
 var
   gscFN, wavFN: String;
   inFS, outFS: TFileStream;
+  ms: TMemoryStream;
 begin
   if ParamCount = 0 then
   begin
@@ -212,9 +229,13 @@ begin
 
   inFS := TFileStream.Create(gscFN, fmOpenRead or fmShareDenyNone);
   outFS := TFileStream.Create(wavFN, fmCreate or fmShareDenyWrite);
+  ms := TMemoryStream.Create;
   try
-    GSCUnpack(inFS, outFS);
+    ms.CopyFrom(inFS, inFS.Size); // to buffer inFS
+    ms.Position := 0;
+    GSCUnpack(ms, outFS);
   finally
+    ms.Free;
     outFS.Free;
     inFS.Free;
   end;

@@ -7,11 +7,12 @@ uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap
 const
   CBandCount = 1;
   C1Freq = 32.703125;
-  CMaxChunksPerFrame = 4096;
-  CStreamVersion = 0;
-  CMaxAttenuation = 16;
+
+  CStreamVersion = 1;
   CVariableCodingHeaderSize = 2;
   CVariableCodingBlockSize = 3;
+  CMaxAttenuation = 16;
+  CMaxChunksPerFrame = 4096;
 
 type
   TEncoder = class;
@@ -40,6 +41,7 @@ type
     channel, index, bandIndex, useCount: Integer;
     underSample: Integer;
     dstNegative: Boolean;
+    dstReversed: Boolean;
     dstAttenuation: Integer;
 
     origSrcData: PDouble;
@@ -51,7 +53,7 @@ type
     destructor Destroy; override;
 
     procedure ComputeDCT;
-    procedure ComputeAttenuationAndSign;
+    procedure ComputeDstAttributes;
     procedure MakeSrcData(origData: PDouble);
     procedure MakeDstData;
   end;
@@ -277,28 +279,42 @@ var
 begin
   SetLength(data, Length(srcData));
   for i := 0 to High(data) do
-    data[i] := srcData[i] * IfThen(dstNegative, -1, 1);
+    data[i] := srcData[IfThen(dstReversed, High(data) - i, i)] * IfThen(dstNegative, -1, 1);
   dct := TEncoder.ComputeDCT(Length(data), data);
 end;
 
-procedure TChunk.ComputeAttenuationAndSign;
+procedure TChunk.ComputeDstAttributes;
 var
-  i, j: Integer;
-  mx: Double;
+  i: Integer;
+  p1, p2: Double;
 begin
   dstAttenuation := TEncoder.ComputeAttenuation(Length(srcData), srcData, frame.AttenuationLaw);
 
-  // compute overall sign
+  // compute overall sign (up <-> down mirror)
 
-  mx := 0.0;
-  j := 0;
+  p1 := 0.0;
   for i := 0 to High(srcData) do
-    if abs(srcData[i]) > mx then
-    begin
-      j := i;
-      mx := abs(srcData[i]);
-    end;
-  dstNegative := (srcData[j] < 0);
+    if srcData[i] < 0 then
+      p1 -= srcData[i];
+
+  p2 := 0.0;
+  for i := 0 to High(srcData) do
+    if srcData[i] > 0 then
+      p2 += srcData[i];
+
+  dstNegative := p1 > p2;
+
+  // compute overall reversed (left <-> right mirror)
+
+  p1 := 0.0;
+  for i := 0 to Length(srcData) div 2 - 1 do
+    p1 += Abs(srcData[i]);
+
+  p2 := 0.0;
+  for i := Length(srcData) div 2 to High(srcData) do
+    p2 += Abs(srcData[i]);
+
+  dstReversed := p1 > p2;
 end;
 
 procedure TChunk.MakeSrcData(origData: PDouble);
@@ -382,7 +398,7 @@ begin
     begin
       chunk := TChunk.Create(frame, i, index, globalData^.underSample, srcData[j]);
       chunk.channel := j;
-      chunk.ComputeAttenuationAndSign;
+      chunk.ComputeDstAttributes;
       chunk.MakeDstData;
       chunk.ComputeDCT;
       finalChunks.Add(chunk);
@@ -412,7 +428,7 @@ begin
 
     for j := 0 to frame.encoder.chunkSize - 1 do
     begin
-      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[j], frame.encoder.ChunkBitDepth, chunk.reducedChunk.dstAttenuation, chunk.dstNegative, frame.AttenuationLaw);
+      smp := TEncoder.makeFloatSample(chunk.reducedChunk.dstData[IfThen(chunk.dstReversed, frame.encoder.chunkSize - 1 - j, j)], frame.encoder.ChunkBitDepth, chunk.reducedChunk.dstAttenuation, chunk.dstNegative, frame.AttenuationLaw);
 
       for k := 0 to globalData^.underSample - 1 do
       begin
@@ -615,7 +631,7 @@ begin
         CIInv[CIList[i].Index] := i;
 
         chunk.srcData := TEncoder.ComputeInvDCT(encoder.chunkSize, centroid);
-        chunk.ComputeAttenuationAndSign;
+        chunk.ComputeDstAttributes;
         chunk.MakeDstData;
   	  end;
 
@@ -639,7 +655,7 @@ begin
       reducedChunks.Add(chunk);
 
       chunk.srcData := Copy(chunkRefs[i].srcData);
-      chunk.ComputeAttenuationAndSign;
+      chunk.ComputeDstAttributes;
       chunk.MakeDstData;
     end;
 
@@ -663,11 +679,16 @@ var
   idxs: array[0 .. CBucketSize - 1] of Integer;
   errs: array[0 .. CBucketSize - 1] of TANNFloat;
 begin
-  SetLength(Dataset, reducedChunks.Count * 2 {Negative}, encoder.chunkSize);
+  SetLength(Dataset, reducedChunks.Count * 2 {Negative} * 2 {Reversed}, encoder.chunkSize);
   SetLength(chunk, encoder.chunkSize);
-  for i := 0 to high(Dataset) do
+  for i := 0 to reducedChunks.Count * 2 - 1 do
     for j := 0 to encoder.ChunkSize - 1 do
-      Dataset[i, j] := TEncoder.makeFloatSample(reducedChunks[i shr 1].dstData[j],
+      Dataset[i * 2 + 0, j] := TEncoder.makeFloatSample(reducedChunks[i shr 1].dstData[j],
+        encoder.ChunkBitDepth, reducedChunks[i shr 1].dstAttenuation, i and 1 <> 0, AttenuationLaw);
+
+  for i := 0 to reducedChunks.Count * 2 - 1 do
+    for j := 0 to encoder.ChunkSize - 1 do
+      Dataset[i * 2 + 1, j] := TEncoder.makeFloatSample(reducedChunks[i shr 1].dstData[encoder.ChunkSize - 1 - j],
         encoder.ChunkBitDepth, reducedChunks[i shr 1].dstAttenuation, i and 1 <> 0, AttenuationLaw);
 
   maxAttenuationLaw := 1.0;
@@ -690,8 +711,9 @@ begin
             SameValue(sqrt(errs[0] / encoder.ChunkSize), sqrt(errs[j] / encoder.ChunkSize), epsilon) then
           bestIdx := idxs[j];
 
-      chunkRefs[i].dstNegative := bestIdx and 1 <> 0;
-      chunkRefs[i].reducedChunk := reducedChunks[bestIdx shr 1];
+      chunkRefs[i].dstNegative := bestIdx and 2 <> 0;
+      chunkRefs[i].dstReversed := bestIdx and 1 <> 0;
+      chunkRefs[i].reducedChunk := reducedChunks[bestIdx shr 2];
 
       Inc(chunkRefs[i].reducedChunk.useCount);
     end;
@@ -786,6 +808,9 @@ begin
       codeSize := 0;
 
       code := code or (Ord(cl[j].dstNegative) shl codeSize);
+      codeSize += 1;
+
+      code := code or (Ord(cl[j].dstReversed) shl codeSize);
       codeSize += 1;
 
       if vcbsCnt = prevVcbsCnt then
@@ -1062,7 +1087,7 @@ begin
 
     bandCost := 0;
     for i := 0 to CBandCount - 1 do
-      bandCost += (SampleCount * ChannelCount * (Log2(ChunksPerFrame) + (1 + CVariableCodingHeaderSize) + 1 {dstNegative})) / (8 {bytes -> bits} * (ChunkSize - ChunkBlend) * bandData[i].underSample);
+      bandCost += (SampleCount * ChannelCount * (Log2(ChunksPerFrame) + (1 + CVariableCodingHeaderSize) + 1 {dstNegative} + 1 {dstReversed})) / (8 {bytes -> bits} * (ChunkSize - ChunkBlend) * bandData[i].underSample);
 
     frameCost := (ChunksPerFrame * ChunkSize) * ChunkBitDepth / 8 + ChunksPerFrame * 4 / 8 + (4 * SizeOf(Word) + SizeOf(Cardinal) + CBandCount * SizeOf(Cardinal)) {frame header};
 
