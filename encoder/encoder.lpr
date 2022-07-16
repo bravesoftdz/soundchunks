@@ -2,7 +2,7 @@ program encoder;
 
 {$mode objfpc}{$H+}
 
-uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, correlation, anysort;
+uses windows, Classes, sysutils, strutils, Types, fgl, MTProcs, math, extern, ap, conv, correlation;
 
 const
   CBandCount = 1;
@@ -235,6 +235,13 @@ begin
   Result := 0;
   if not IsNan(x) then
     Result := x;
+end;
+
+function div0(x, y: Double): Double; inline;
+begin
+  Result := 0;
+  if not IsZero(y) then
+    Result := x / y;
 end;
 
 { TChunk }

@@ -76,6 +76,8 @@ type
 
   PANNkdtree = ^TANNkdtree;
 
+  TCompareFunction=function(Item1,Item2,UserParameter:Pointer):Integer;
+
 procedure DoExternalSKLearn(Dataset: TFloatDynArray2;  ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean; var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
 procedure DoExternalSOX(AFNIn, AFNOut: String; SampleRate: Integer = 0);
 function DoExternalEAQUAL(AFNRef, AFNTest: String; PrintStats, UseDIX: Boolean; BlockLength: Integer): Double;
@@ -104,7 +106,59 @@ function InvariantFormatSettings: TFormatSettings;
 function internalRuncommand(p:TProcess;var outputstring:string;
                             var stderrstring:string; var exitstatus:integer; PrintOut: Boolean):integer;
 
+procedure QuickSort(var AData;AFirstItem,ALastItem,AItemSize:Integer;ACompareFunction:TCompareFunction;AUserParameter:Pointer=nil);
+
 implementation
+
+procedure QuickSort(var AData;AFirstItem,ALastItem,AItemSize:Integer;ACompareFunction:TCompareFunction;AUserParameter:Pointer=nil);
+var I, J, P: Integer;
+    PData,P1,P2: PByte;
+    Tmp: array[0..4095] of Byte;
+begin
+  if ALastItem <= AFirstItem then
+    Exit;
+
+  Assert(AItemSize < SizeOf(Tmp),'AItemSize too big!');
+  PData:=PByte(@AData);
+  repeat
+    I := AFirstItem;
+    J := ALastItem;
+    P := (AFirstItem + ALastItem) shr 1;
+    repeat
+      P1:=PData;Inc(P1,I*AItemSize);
+      P2:=PData;Inc(P2,P*AItemSize);
+      while ACompareFunction(P1, P2, AUserParameter) < 0 do
+      begin
+        Inc(I);
+        Inc(P1,AItemSize);
+      end;
+      P1:=PData;Inc(P1,J*AItemSize);
+      //P2:=PData;Inc(P2,P*AItemSize); already done
+      while ACompareFunction(P1, P2, AUserParameter) > 0 do
+      begin
+        Dec(J);
+        Dec(P1,AItemSize);
+      end;
+      if I <= J then
+      begin
+        P1:=PData;Inc(P1,I*AItemSize);
+        P2:=PData;Inc(P2,J*AItemSize);
+        Move(P2^, Tmp[0], AItemSize);
+        Move(P1^, P2^, AItemSize);
+        Move(Tmp[0], P1^, AItemSize);
+
+        if P = I then
+          P := J
+        else if P = J then
+          P := I;
+        Inc(I);
+        Dec(J);
+      end;
+    until I > J;
+    if AFirstItem < J then QuickSort(AData,AFirstItem,J,AItemSize,ACompareFunction,AUserParameter);
+    AFirstItem := I;
+  until I >= ALastItem;
+end;
 
 var
   GTempAutoInc : Integer = 0;
