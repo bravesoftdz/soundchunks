@@ -126,6 +126,7 @@ type
     TrebleBoost: Boolean;
     ChunkBlend: Integer;
     FrameLength: Double;
+    PythonReduce: Boolean;
 
     ChannelCount: Integer;
     SampleRate: Integer;
@@ -489,8 +490,8 @@ begin
 
         for l := 0 to encoder.ChunkSize - 1 do
         begin
-          os := TEncoder.makeOutputSample(tmp[l], encoder.ChunkBitDepth, atten, False, CLawNumerator / i);
-          fs := TEncoder.makeFloatSample(os, encoder.ChunkBitDepth, atten, False, CLawNumerator / i);
+          os := TEncoder.makeOutputSample(tmp[l], 16, atten, False, CLawNumerator / i);
+          fs := TEncoder.makeFloatSample(os, 16, atten, False, CLawNumerator / i);
           v += sqr(bands[0].srcData[j, pos + l] - fs);
         end;
       end;
@@ -571,7 +572,7 @@ begin
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids, clusterCount, colCount);
 
-    if True then
+    if not encoder.PythonReduce then
     begin
       Yakmo := yakmo_create(clusterCount, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
       yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
@@ -582,6 +583,7 @@ begin
     else
     begin
       DoExternalSKLearn(Dataset, clusterCount, prec, False, encoder.Verbose, Clusters, Centroids);
+      SetLength(Centroids, clusterCount, colCount);
     end;
 
     CIList := TCountIndexList.Create;
@@ -1217,6 +1219,7 @@ begin
   VariableFrameSizeRatio := 1.0;
   ChunkBlend := 0;
   FrameLength := 4000; // in ms
+  PythonReduce := False;
 
   ChunksPerFrame := CMaxChunksPerFrame;
   BandTransFactor := 1 / 256;
@@ -1688,6 +1691,7 @@ begin
       WriteLn(#9'-cbd'#9'chunk bit depth (8,12)');
       WriteLn(#9'-pr'#9'K-means precision; 0: "lossless" mode');
       WriteLn(#9'-cb'#9'chunk blend');
+      WriteLn(#9'-py'#9'python cluster.py reducer');
 
       WriteLn;
       Writeln('(source file must be 16bit WAV or anything SOX can convert)');
@@ -1709,6 +1713,7 @@ begin
       enc.Verbose := HasParam('-v');
       enc.ReduceBassBand := not HasParam('-pbb');
       enc.ChunkBlend := EnsureRange(round(ParamValue('-cb', enc.ChunkBlend)), 0, enc.ChunkSize div 2);
+      enc.PythonReduce := HasParam('-py');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
