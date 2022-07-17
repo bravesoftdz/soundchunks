@@ -111,13 +111,13 @@
     </PublishOptions>
     <RunParams>
       <local>
-        <CommandLineParams Value="..\lame_test\mstest.wav ..\ms.wav -v -fl500 -cpf256 -py -pr7"/>
+        <CommandLineParams Value="..\lame_test\mstest.wav ..\ms.wav -v -py"/>
       </local>
       <FormatVersion Value="2"/>
       <Modes Count="1">
         <Mode0 Name="default">
           <local>
-            <CommandLineParams Value="..\lame_test\mstest.wav ..\ms.wav -v -fl500 -cpf256 -py -pr7"/>
+            <CommandLineParams Value="..\lame_test\mstest.wav ..\ms.wav -v -py"/>
           </local>
         </Mode0>
       </Modes>

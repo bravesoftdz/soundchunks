@@ -11,8 +11,9 @@ const
   CStreamVersion = 1;
   CVariableCodingHeaderSize = 2;
   CVariableCodingBlockSize = 3;
-  CMaxAttenuation = 16;
+  CMaxAttenuation = 15;
   CMaxChunksPerFrame = 4096;
+  CAttenuationLawNumerator = 1;
 
 type
   TEncoder = class;
@@ -84,6 +85,8 @@ type
   { TFrame }
 
   TFrame = class
+  private
+    function GetAttenuationLaw: Double;
   public
     encoder: TEncoder;
 
@@ -91,7 +94,6 @@ type
     SampleCount: Integer;
     FrameSize: Integer;
     AttenuationDivider: Integer;
-    AttenuationLaw: Double;
 
     chunkRefs, reducedChunks: TChunkList;
 
@@ -105,6 +107,8 @@ type
     procedure KMeansReduce;
     procedure KNNFit;
     procedure SaveStream(AStream: TStream);
+
+    property AttenuationLaw: Double read GetAttenuationLaw;
   end;
 
   TFrameList = specialize TFPGObjectList<TFrame>;
@@ -442,6 +446,11 @@ begin
   end;
 end;
 
+function TFrame.GetAttenuationLaw: Double;
+begin
+  Result := CAttenuationLawNumerator / AttenuationDivider;
+end;
+
 constructor TFrame.Create(enc: TEncoder; idx, startSample, endSample: Integer);
 var
   i: Integer;
@@ -480,8 +489,6 @@ begin
 end;
 
 procedure TFrame.FindAttenuationDivider;
-const
-  CLawNumerator = 1;
 var
   i, j, k, l, bestDiv, atten, pos: Integer;
   best, v, fs: Double;
@@ -491,7 +498,7 @@ begin
   SetLength(tmp, encoder.ChunkSize);
   bestDiv := 1;
   best := MaxSingle;
-  for i := CLawNumerator to CLawNumerator * 16 - 1 do
+  for i := CAttenuationLawNumerator to High(Byte) do
   begin
     v := 0;
     for j := 0 to encoder.ChannelCount - 1 do
@@ -502,13 +509,13 @@ begin
         for l := 0 to encoder.ChunkSize - 1 do
           tmp[l] := bands[0].srcData[j, pos + l];
 
-        atten := TEncoder.ComputeAttenuation(encoder.ChunkSize, tmp, CLawNumerator / i);
+        atten := TEncoder.ComputeAttenuation(encoder.ChunkSize, tmp, CAttenuationLawNumerator / i);
 
         for l := 0 to encoder.ChunkSize - 1 do
         begin
-          os := TEncoder.makeOutputSample(tmp[l], 16, atten, False, CLawNumerator / i);
-          fs := TEncoder.makeFloatSample(os, 16, atten, False, CLawNumerator / i);
-          v += sqr(bands[0].srcData[j, pos + l] - fs);
+          os := TEncoder.makeOutputSample(tmp[l], encoder.ChunkBitDepth, atten, False, CAttenuationLawNumerator / i);
+          fs := TEncoder.makeFloatSample(os, encoder.ChunkBitDepth, atten, False, CAttenuationLawNumerator / i);
+          v += sqr(tmp[l] - fs);
         end;
       end;
 
@@ -520,7 +527,6 @@ begin
   end;
 
   AttenuationDivider := bestDiv;
-  AttenuationLaw := CLawNumerator / bestDiv;
 end;
 
 procedure TFrame.MakeChunks;
@@ -692,7 +698,7 @@ begin
         encoder.ChunkBitDepth, reducedChunks[i shr 1].dstAttenuation, i and 1 <> 0, AttenuationLaw);
 
   maxAttenuationLaw := 1.0;
-  for j := 0 to CMaxAttenuation - 1 do
+  for j := 0 to CMaxAttenuation do
     maxAttenuationLaw += j * AttenuationLaw;
   epsilon := max(1.0 / ((1 shl encoder.ChunkBitDepth) * maxAttenuationLaw), 1.0 / high(SmallInt));
 
@@ -734,8 +740,7 @@ end;
 procedure TFrame.SaveStream(AStream: TStream);
 var
   i, j, k, s1, s2, vcbsCnt, prevVcbsCnt, codeSize, bitCnt: Integer;
-  code, w: Integer;
-  bits: Cardinal;
+  code, w, bits: Cardinal;
   cl: TChunkList;
 begin
   Assert(reducedChunks.Count <= CMaxChunksPerFrame);
@@ -1399,7 +1404,7 @@ begin
   for i := 0 to Attenuation do
     coeff += i * Law;
 
-  obd := (1 shl (OutBitDepth - 1));
+  obd := (1 shl (OutBitDepth - 1)) - 1;
   smp16 := round(smp * obd * coeff);
   if Negative then smp16 := -smp16;
   smp16 := EnsureRange(smp16, -obd + 1, obd - 1);
@@ -1416,10 +1421,10 @@ begin
   for i := 0 to Attenuation do
     coeff += i * Law;
 
-  obd := (1 shl (OutBitDepth - 1)) * coeff;
+  obd := (1 shl (OutBitDepth - 1)) - 1;
   smp16 := smp;
   if Negative then smp16 := -smp16;
-  Result := smp16 / obd;
+  Result := smp16 / (obd * coeff);
   Result := EnsureRange(Result, -1.0, 1.0);
 end;
 
@@ -1432,13 +1437,13 @@ begin
   for i := 0 to chunkSz - 1 do
     hiSmp := max(hiSmp, ceil(abs(samples[i] * High(SmallInt))));
 
-  Result := 1;
+  Result := 0;
   coeff := 1.0;
   repeat
-    coeff += Result * Law;
     Inc(Result);
+    coeff += Result * Law;
   until (hiSmp * coeff > High(SmallInt)) or (Result > CMaxAttenuation);
-  Dec(Result, 2);
+  Dec(Result);
 end;
 
 class function TEncoder.ComputeDCT(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;

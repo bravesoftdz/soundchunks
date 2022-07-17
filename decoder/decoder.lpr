@@ -4,12 +4,13 @@ uses Types, SysUtils, Classes, Math, extern;
 
 const
   CAttrMul = round((High(SmallInt) + 1) * (High(SmallInt) / 2047));
-  CMaxAttenuation = 16;
+  CMaxAttenuation = 15;
+  CAttenuationLawNumerator = 1;
   CVariableCodingHeaderSize = 2;
   CVariableCodingBlockSize = 3;
 
 var
-  CAttrLookup : array[Boolean {negative?}, 0 .. CMaxAttenuation - 1] of Integer;
+  CAttrLookup : array[Boolean {negative?}, 0 .. CMaxAttenuation] of Integer;
 
 
   function CreateWAVHeader(channels: word; resolution: word; rate, size: longint): TWavHeader;
@@ -84,9 +85,9 @@ var
 
         // compute attenuation law from AttenuationDivider
 
-        law := 1.0 / AttenuationDivider;
+        law := CAttenuationLawNumerator / AttenuationDivider;
         lawAcc := 1.0;
-        for i := 0 to CMaxAttenuation - 1 do
+        for i := 0 to CMaxAttenuation do
         begin
           lawAcc += law * i;
 
