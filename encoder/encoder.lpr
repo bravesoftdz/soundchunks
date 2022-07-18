@@ -104,6 +104,7 @@ type
 
     procedure FindAttenuationDivider;
     procedure MakeChunks;
+    procedure KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDynArray2; var Clusters: TIntegerDynArray);
     procedure KMeansReduce;
     procedure KNNFit;
     procedure SaveStream(AStream: TStream);
@@ -498,7 +499,7 @@ begin
   SetLength(tmp, encoder.ChunkSize);
   bestDiv := 1;
   best := MaxSingle;
-  for i := CAttenuationLawNumerator to High(Byte) do
+  for i := CAttenuationLawNumerator to CAttenuationLawNumerator * 64 do
   begin
     v := 0;
     for j := 0 to encoder.ChannelCount - 1 do
@@ -543,6 +544,71 @@ begin
   end;
 end;
 
+procedure TFrame.KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDynArray2; var Clusters: TIntegerDynArray
+  );
+const
+  CCntStart = 1;
+var
+  i, j, k, iter, bestIdx, clusterCount: Integer;
+  err, prevErr: Double;
+  v, best, rate: TANNFloat;
+  cnts: array[Boolean] of TIntegerDynArray;
+  KDT: PANNkdtree;
+begin
+  clusterCount := Length(Centroids);
+
+  SetLength(cnts[False], clusterCount);
+  SetLength(cnts[True], clusterCount);
+
+  for j := 0 to clusterCount - 1 do
+  begin
+    cnts[False, j] := CCntStart;
+    cnts[True, j] := CCntStart;
+  end;
+
+  iter := 0;
+  err := MaxSingle;
+  repeat
+    prevErr := err;
+    err := 0;
+
+    KDT := ann_kdtree_create(@Centroids[0], clusterCount, encoder.ChunkSize, 1, ANN_KD_STD);
+
+    for i := 0 to chunkRefs.Count - 1 do
+    begin
+      bestIdx := ann_kdtree_search(KDT, @Dataset[i, 0], 0.0, @best);
+
+      rate := 1 / cnts[not Odd(iter), bestIdx];
+      for k := 0 to encoder.ChunkSize - 1 do
+      begin
+        v := Dataset[i, k] - Centroids[bestIdx, k];
+        Centroids[bestIdx, k] += v * rate;
+      end;
+
+      Clusters[i] := bestIdx;
+      err += sqrt(best / encoder.ChunkSize);
+      cnts[Odd(iter), bestIdx] += 1;
+    end;
+
+    if encoder.Verbose then
+    begin
+{$if false}
+      WriteLn(index:7, iter:7, err:10:3);
+{$else}
+      Write('.');
+{$ifend}
+    end;
+
+    for j := 0 to clusterCount - 1 do
+      cnts[not Odd(iter), j] := CCntStart;
+
+    Inc(iter);
+
+    ann_kdtree_destroy(KDT);
+
+  until SameValue(err, prevErr, 0.01);
+end;
+
 type
   TCountIndex = class
     Index, Count: Integer;
@@ -563,7 +629,7 @@ end;
 
 procedure TFrame.KMeansReduce;
 var
-  i, j, prec, colCount, clusterCount: Integer;
+  i, j, k, prec, colCount, clusterCount: Integer;
   chunk: TChunk;
   centroid: TDoubleDynArray;
   Clusters: TIntegerDynArray;
@@ -575,7 +641,7 @@ var
 begin
   prec := encoder.Precision;
 
-  colCount := encoder.chunkSize;
+  colCount := Length(chunkRefs[0].dct);
   clusterCount := encoder.ChunksPerFrame;
 
   SetLength(Dataset, chunkRefs.Count, colCount);
@@ -592,15 +658,18 @@ begin
       WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
 
     SetLength(Clusters, chunkRefs.Count);
-    SetLength(Centroids, clusterCount, colCount);
+    SetLength(Centroids, clusterCount, encoder.ChunkSize);
+    SetLength(centroid, encoder.chunkSize);
 
     if not encoder.PythonReduce then
     begin
-      Yakmo := yakmo_create(clusterCount, prec, MaxInt, 1, 0, 0, IfThen(encoder.Verbose, 1));
+      Yakmo := yakmo_create(clusterCount, prec, 1, 1, 0, 0, IfThen(encoder.Verbose, 1));
       yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
       yakmo_train_on_data(Yakmo, @Clusters[0]);
       yakmo_get_centroids(Yakmo, @Centroids[0]);
       yakmo_destroy(Yakmo);
+
+      KNNScanReduce(Dataset, Centroids, Clusters);
     end
     else
     begin
@@ -615,14 +684,23 @@ begin
         CIList.Add(TCountIndex.Create);
         CIList[i].Index := i;
 
+        for k := 0 to encoder.ChunkSize - 1 do
+          centroid[k] := 0;
+
         for j := 0 to High(Clusters) do
           if Clusters[j] = i then
+          begin
+            for k := 0 to encoder.ChunkSize - 1 do
+              centroid[k] += chunkRefs[j].srcData[IfThen(chunkRefs[j].dstReversed, encoder.ChunkSize - 1 - k, k)] * IfThen(chunkRefs[j].dstNegative, -1, 1);
+
             Inc(CIList[i].Count);
+          end;
+
+        for k := 0 to encoder.ChunkSize - 1 do
+          Centroids[i, k] := div0(centroid[k], CIList[i].Count);
       end;
       CIList.Sort(@CompareCountIndexInv);
       SetLength(CIInv, clusterCount);
-
-      SetLength(centroid, encoder.chunkSize);
 
       reducedChunks.Clear;
       reducedChunks.Capacity := clusterCount;
@@ -632,11 +710,10 @@ begin
         reducedChunks.Add(chunk);
 
         for j := 0 to encoder.chunkSize - 1 do
-          centroid[j] := nan0(Centroids[CIList[i].Index][j]);
+          chunk.srcData[j] := nan0(Centroids[CIList[i].Index][j]);
 
         CIInv[CIList[i].Index] := i;
 
-        chunk.srcData := TEncoder.ComputeInvDCT(encoder.chunkSize, centroid);
         chunk.ComputeDstAttributes;
         chunk.MakeDstData;
   	  end;
@@ -1608,7 +1685,7 @@ end;
 class function TEncoder.ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
 var
   i, j, len: Integer;
-  rr, rt: TReal1DArray;
+  rr, rt: TDoubleDynArray;
 begin
   len := length(smpRef) * length(smpRef[0]);
   Assert(len = length(smpTst) * length(smpTst[0]), 'ComputePsyADelta length mismatch!');
