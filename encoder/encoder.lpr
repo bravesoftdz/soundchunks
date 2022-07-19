@@ -87,6 +87,9 @@ type
   TFrame = class
   private
     function GetAttenuationLaw: Double;
+    function FindQuietest(Dataset: TFloatDynArray2): Integer;
+    function InitFarthestFirst(Dataset: TFloatDynArray2; InitPoint: Integer): TFloatDynArray2;
+    procedure KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDynArray2; var Clusters: TIntegerDynArray);
   public
     encoder: TEncoder;
 
@@ -104,7 +107,6 @@ type
 
     procedure FindAttenuationDivider;
     procedure MakeChunks;
-    procedure KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDynArray2; var Clusters: TIntegerDynArray);
     procedure KMeansReduce;
     procedure KNNFit;
     procedure SaveStream(AStream: TStream);
@@ -134,6 +136,7 @@ type
     ChunkBlend: Integer;
     FrameLength: Double;
     PythonReduce: Boolean;
+    DebugMode: Boolean;
 
     ChannelCount: Integer;
     SampleRate: Integer;
@@ -162,9 +165,9 @@ type
     class function ComputeDCT4(chunkSz: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeModifiedDCT(samplesSize: Integer; const samples: TDoubleDynArray): TDoubleDynArray;
     class function ComputeInvModifiedDCT(dctSize: Integer; const dct: TDoubleDynArray): TDoubleDynArray;
-    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TANNFloatDynArray): Double; overload;
-    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double; overload;
-    class function CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double; overload;
+    class function CompareEuclidean(const dctA, dctB: TANNFloatDynArray): TANNFloat; overload;
+    class function CompareEuclidean(const dctA, dctB: TDoubleDynArray): Double; overload;
+    class function CompareEuclidean(const dctA, dctB: TSmallIntDynArray): Double; overload;
     class function CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean; inline;
     class function ComputePsyADelta(const smpRef, smpTst: TSmallIntDynArray2): Double;
     class procedure createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
@@ -447,11 +450,6 @@ begin
   end;
 end;
 
-function TFrame.GetAttenuationLaw: Double;
-begin
-  Result := CAttenuationLawNumerator / AttenuationDivider;
-end;
-
 constructor TFrame.Create(enc: TEncoder; idx, startSample, endSample: Integer);
 var
   i: Integer;
@@ -487,6 +485,11 @@ begin
     bands[i].Free;
 
   inherited Destroy;
+end;
+
+function TFrame.GetAttenuationLaw: Double;
+begin
+  Result := CAttenuationLawNumerator / AttenuationDivider;
 end;
 
 procedure TFrame.FindAttenuationDivider;
@@ -544,6 +547,83 @@ begin
   end;
 end;
 
+function TFrame.FindQuietest(Dataset: TFloatDynArray2): Integer;
+var
+  i, j: Integer;
+  v, best: TFloat;
+begin
+  best := MaxSingle;
+  Result := -1;
+  for i := 0 to High(Dataset) do
+  begin
+    v := 0;
+    for j := 0 to encoder.ChunkSize - 1 do
+      v += Abs(Dataset[i, j]);
+    if v < best then
+    begin
+      best := v;
+      Result := i;
+    end;
+  end;
+end;
+
+function TFrame.InitFarthestFirst(Dataset: TFloatDynArray2; InitPoint: Integer): TFloatDynArray2;
+var
+  icentroid, ifarthest, i: Integer;
+  max: TFloat;
+  used: TBooleanDynArray;
+  mindistance: TFloatDynArray;
+  floatDummyDist: TFloat;
+  dummyDist: Integer absolute floatDummyDist;
+
+  procedure UpdateMinDistance(icenter: Integer); inline;
+  var
+    i: Integer;
+    dis: TFloat;
+  begin
+    for i := 0 to high(Dataset) do
+      if not used[i] then
+      begin
+        dis := TEncoder.CompareEuclidean(Dataset[icenter], Dataset[i]);
+        if dis < mindistance[i] then
+          mindistance[i] := dis;
+      end;
+  end;
+
+begin
+  floatDummyDist := MaxSingle;
+  SetLength(Result, encoder.ChunksPerFrame, encoder.ChunkSize);
+  SetLength(used, Length(Dataset));
+  SetLength(mindistance, Length(Dataset));
+
+  for icentroid := 0 to encoder.ChunksPerFrame - 1 do
+    FillDWord(Result[icentroid, 0], encoder.ChunkSize, dummyDist);
+  FillChar(used[0], Length(Dataset), False);
+  FillDWord(mindistance[0], Length(Dataset), dummyDist);
+
+  icentroid := 0;
+  ifarthest := InitPoint;
+  Move(Dataset[ifarthest, 0], Result[icentroid, 0], encoder.ChunkSize * SizeOf(TFloat));
+  used[ifarthest] := True;
+  UpdateMinDistance(ifarthest);
+
+  for icentroid := 1 to encoder.ChunksPerFrame - 1 do
+  begin
+    max := 0;
+    ifarthest := -1;
+    for i := 0 to Length(Dataset) - 1 do
+      if (MinDistance[i] >= max) and not Used[i] then
+      begin
+        max := MinDistance[i];
+        ifarthest := i;
+      end;
+
+    Move(Dataset[ifarthest, 0], Result[icentroid, 0], encoder.ChunkSize * SizeOf(TFloat));
+    used[ifarthest] := True;
+    UpdateMinDistance(ifarthest);
+  end;
+end;
+
 procedure TFrame.KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDynArray2; var Clusters: TIntegerDynArray
   );
 const
@@ -578,7 +658,7 @@ begin
     begin
       bestIdx := ann_kdtree_search(KDT, @Dataset[i, 0], 0.0, @best);
 
-      rate := 1 / cnts[not Odd(iter), bestIdx];
+      rate := 1 / sqrt(cnts[not Odd(iter), bestIdx]);
       for k := 0 to encoder.ChunkSize - 1 do
       begin
         v := Dataset[i, k] - Centroids[bestIdx, k];
@@ -606,7 +686,7 @@ begin
 
     ann_kdtree_destroy(KDT);
 
-  until SameValue(err, prevErr, 0.01);
+  until SameValue(err, prevErr, IntPower(10.0, -encoder.Precision));
 end;
 
 type
@@ -663,11 +743,19 @@ begin
 
     if not encoder.PythonReduce then
     begin
-      Yakmo := yakmo_create(clusterCount, prec, 1, 1, 0, 0, IfThen(encoder.Verbose, 1));
-      yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
-      yakmo_train_on_data(Yakmo, @Clusters[0]);
-      yakmo_get_centroids(Yakmo, @Centroids[0]);
-      yakmo_destroy(Yakmo);
+      if False then
+      begin
+        // using Yakmo KMeans++ init
+        Yakmo := yakmo_create(clusterCount, 1, 1, 1, 0, 0, IfThen(encoder.Verbose, 1));
+        yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
+        yakmo_train_on_data(Yakmo, @Clusters[0]);
+        yakmo_get_centroids(Yakmo, @Centroids[0]);
+        yakmo_destroy(Yakmo);
+      end
+      else
+      begin
+        Centroids := InitFarthestFirst(Dataset, FindQuietest(Dataset));
+      end;
 
       KNNScanReduce(Dataset, Centroids, Clusters);
     end
@@ -1327,6 +1415,7 @@ begin
   ChunkBlend := 0;
   FrameLength := 4000; // in ms
   PythonReduce := False;
+  Precision := 3;
 
   ChunksPerFrame := CMaxChunksPerFrame;
   BandTransFactor := 1 / 256;
@@ -1613,40 +1702,43 @@ begin
   end;
 end;
 
-class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TANNFloatDynArray): Double;
+class function TEncoder.CompareEuclidean(const dctA, dctB: TANNFloatDynArray): TANNFloat;
 var
   i: Integer;
 begin
+  Assert(Length(dctA) = Length(dctB));
   Result := 0.0;
 
-  for i := firstCoeff to lastCoeff do
+  for i := 0 to High(dctA) do
     Result += sqr(dctA[i] - dctB[i]);
 
-  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
+  Result := sqrt(Result / Length(dctA));
 end;
 
-class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TDoubleDynArray): Double;
+class function TEncoder.CompareEuclidean(const dctA, dctB: TDoubleDynArray): Double;
 var
   i: Integer;
 begin
+  Assert(Length(dctA) = Length(dctB));
   Result := 0.0;
 
-  for i := firstCoeff to lastCoeff do
+  for i := 0 to High(dctA) do
     Result += sqr(dctA[i] - dctB[i]);
 
-  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
+  Result := sqrt(Result / Length(dctA));
 end;
 
-class function TEncoder.CompareEuclidean(firstCoeff, lastCoeff: Integer; const dctA, dctB: TSmallIntDynArray): Double;
+class function TEncoder.CompareEuclidean(const dctA, dctB: TSmallIntDynArray): Double;
 var
   i: Integer;
 begin
+  Assert(Length(dctA) = Length(dctB));
   Result := 0.0;
 
-  for i := firstCoeff to lastCoeff do
+  for i := 0 to High(dctA) do
     Result += sqr((dctA[i] - dctB[i]) / High(SmallInt));
 
-  Result := sqrt(Result / (lastCoeff - firstCoeff + 1));
+  Result := sqrt(Result / Length(dctA));
 end;
 
 class function TEncoder.CheckJoinPenalty(x, y, z, a, b, c: Double; TestRange: Boolean): Boolean;
@@ -1699,10 +1791,7 @@ begin
       rt[j * Length(smpRef[0]) + i] := smpTst[j, i];
     end;
 
-  //rr := ComputeDCT(len, rr);
-  //rt := ComputeDCT(len, rt);
-
-  Result := CompareEuclidean(0, len - 1, rr, rt);
+  Result := CompareEuclidean(rr, rt);
 end;
 
 class procedure TEncoder.createWAV(channels: word; resolution: word; rate: longint; fn: string; const data: TSmallIntDynArray);
@@ -1789,9 +1878,9 @@ begin
       WriteLn(#9'-hc'#9'treble cutoff frequency');
       WriteLn(#9'-vfr'#9'RMS power based variable frame size ratio (0.0-1.0); default: "-vfr1.0"');
       WriteLn(#9'-fl'#9'(Average) frame length in milliseconds; default: "-fl4000"');
-
       WriteLn(#9'-v'#9'verbose mode');
       Writeln('Development options:');
+      WriteLn(#9'-d'#9'debug mode (outputs decoded WAVs)');
       WriteLn(#9'-cs'#9'chunk size');
       WriteLn(#9'-cpf'#9'max. chunks per frame (256-4096)');
       WriteLn(#9'-pbb'#9'disable lossy compression on bass band');
@@ -1821,6 +1910,7 @@ begin
       enc.ReduceBassBand := not HasParam('-pbb');
       enc.ChunkBlend := EnsureRange(round(ParamValue('-cb', enc.ChunkBlend)), 0, enc.ChunkSize div 2);
       enc.PythonReduce := HasParam('-py');
+      enc.DebugMode := HasParam('-d');
 
       WriteLn('BitRate = ', FloatToStr(enc.BitRate));
       WriteLn('LowCut = ', FloatToStr(enc.LowCut));
@@ -1844,24 +1934,24 @@ begin
       enc.MakeFrames;
       enc.MakeDstData;
 
-      enc.SaveWAV;
-      if CBandCount > 1 then
-        for i := 0 to CBandCount - 1 do
-          enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
-
       br := 0;
       if enc.Precision > 0 then
         br := enc.SaveGSC;
 
-      //dix := enc.ComputeEAQUAL(enc.SampleCount, True, True, enc.srcData, enc.dstData);
-      //WriteLn('EAQUAL = ', FloatToStr(dix));
-
       psy := enc.ComputePsyADelta(enc.srcData, enc.dstData);
       WriteLn('PsyADelta = ', FormatFloat(',0.0000000000', psy));
 
-      s := IntToStr(round(br)) + ' ' + FormatFloat(',0.00000', psy) + ' ';
-      for i := 0 to ParamCount do s := s + ParamStr(i) + ' ';
-      ShellExecute(0, 'open', 'cmd.exe', PChar('/c echo ' + s + ' >> ..\log.txt'), '', 0);
+      if enc.DebugMode then
+      begin
+        enc.SaveWAV;
+        if CBandCount > 1 then
+          for i := 0 to CBandCount - 1 do
+            enc.SaveBandWAV(i, ChangeFileExt(enc.outputFN, '-' + IntToStr(i) + '.wav'));
+
+        s := IntToStr(round(br)) + ' ' + FormatFloat(',0.00000', psy) + ' ';
+        for i := 0 to ParamCount do s := s + ParamStr(i) + ' ';
+        ShellExecute(0, 'open', 'cmd.exe', PChar('/c echo ' + s + ' >> ..\log.txt'), '', 0);
+      end;
 
     finally
       enc.Free;
