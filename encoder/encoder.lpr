@@ -107,7 +107,7 @@ type
 
     procedure FindAttenuationDivider;
     procedure MakeChunks;
-    procedure KMeansReduce;
+    procedure Reduce;
     procedure KNNFit;
     procedure SaveStream(AStream: TStream);
 
@@ -569,7 +569,7 @@ end;
 
 function TFrame.InitFarthestFirst(Dataset: TFloatDynArray2; InitPoint: Integer): TFloatDynArray2;
 var
-  icentroid, ifarthest, i: Integer;
+  icentroid, ifarthest, i, colCount: Integer;
   max: TFloat;
   used: TBooleanDynArray;
   mindistance: TFloatDynArray;
@@ -591,19 +591,20 @@ var
   end;
 
 begin
+  colCount := Length(Dataset[0]);
   floatDummyDist := MaxSingle;
-  SetLength(Result, encoder.ChunksPerFrame, encoder.ChunkSize);
+  SetLength(Result, encoder.ChunksPerFrame, colCount);
   SetLength(used, Length(Dataset));
   SetLength(mindistance, Length(Dataset));
 
   for icentroid := 0 to encoder.ChunksPerFrame - 1 do
-    FillDWord(Result[icentroid, 0], encoder.ChunkSize, dummyDist);
+    FillDWord(Result[icentroid, 0], colCount, dummyDist);
   FillChar(used[0], Length(Dataset), False);
   FillDWord(mindistance[0], Length(Dataset), dummyDist);
 
   icentroid := 0;
   ifarthest := InitPoint;
-  Move(Dataset[ifarthest, 0], Result[icentroid, 0], encoder.ChunkSize * SizeOf(TFloat));
+  Move(Dataset[ifarthest, 0], Result[icentroid, 0], colCount * SizeOf(TFloat));
   used[ifarthest] := True;
   UpdateMinDistance(ifarthest);
 
@@ -618,7 +619,7 @@ begin
         ifarthest := i;
       end;
 
-    Move(Dataset[ifarthest, 0], Result[icentroid, 0], encoder.ChunkSize * SizeOf(TFloat));
+    Move(Dataset[ifarthest, 0], Result[icentroid, 0], colCount * SizeOf(TFloat));
     used[ifarthest] := True;
     UpdateMinDistance(ifarthest);
   end;
@@ -628,13 +629,15 @@ procedure TFrame.KNNScanReduce(Dataset: TFloatDynArray2; var Centroids: TFloatDy
   );
 const
   CCntStart = 1;
+  CMaxIterations = 100;
 var
-  i, j, k, iter, bestIdx, clusterCount: Integer;
+  i, j, k, iter, bestIdx, colCount, clusterCount: Integer;
   err, prevErr: Double;
   v, best, rate: TANNFloat;
   cnts: array[Boolean] of TIntegerDynArray;
   KDT: PANNkdtree;
 begin
+  colCount := Length(Dataset[0]);
   clusterCount := Length(Centroids);
 
   SetLength(cnts[False], clusterCount);
@@ -652,21 +655,21 @@ begin
     prevErr := err;
     err := 0;
 
-    KDT := ann_kdtree_create(@Centroids[0], clusterCount, encoder.ChunkSize, 1, ANN_KD_STD);
+    KDT := ann_kdtree_create(@Centroids[0], clusterCount, colCount, 1, ANN_KD_STD);
 
     for i := 0 to chunkRefs.Count - 1 do
     begin
       bestIdx := ann_kdtree_search(KDT, @Dataset[i, 0], 0.0, @best);
 
       rate := 1 / sqrt(cnts[not Odd(iter), bestIdx]);
-      for k := 0 to encoder.ChunkSize - 1 do
+      for k := 0 to colCount - 1 do
       begin
         v := Dataset[i, k] - Centroids[bestIdx, k];
         Centroids[bestIdx, k] += v * rate;
       end;
 
       Clusters[i] := bestIdx;
-      err += sqrt(best / encoder.ChunkSize);
+      err += sqrt(best / colCount);
       cnts[Odd(iter), bestIdx] += 1;
     end;
 
@@ -674,8 +677,6 @@ begin
     begin
 {$if false}
       WriteLn(index:7, iter:7, err:10:3);
-{$else}
-      Write('.');
 {$ifend}
     end;
 
@@ -686,7 +687,10 @@ begin
 
     ann_kdtree_destroy(KDT);
 
-  until SameValue(err, prevErr, IntPower(10.0, -encoder.Precision));
+  until SameValue(err, prevErr, IntPower(10.0, -encoder.Precision)) or (iter >= CMaxIterations);
+
+  if encoder.Verbose then
+    WriteLn('Frame index: ', index:3, ' Iteration: ', iter:3, ' Residual error: ', err:10:3);
 end;
 
 type
@@ -707,7 +711,7 @@ begin
   Result := CompareValue(Item2.useCount, Item1.useCount);
 end;
 
-procedure TFrame.KMeansReduce;
+procedure TFrame.Reduce;
 var
   i, j, k, prec, colCount, clusterCount: Integer;
   chunk: TChunk;
@@ -732,10 +736,10 @@ begin
 
   if (prec > 0) and (chunkRefs.Count > clusterCount) then
   begin
-    // usual chunk reduction using K-Means
+    // usual chunk reduction
 
     if encoder.Verbose then
-      WriteLn('KMeansReduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
+      WriteLn('Reduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
 
     SetLength(Clusters, chunkRefs.Count);
     SetLength(Centroids, clusterCount, encoder.ChunkSize);
@@ -743,10 +747,10 @@ begin
 
     if not encoder.PythonReduce then
     begin
-      if False then
+      if True then
       begin
         // using Yakmo KMeans++ init
-        Yakmo := yakmo_create(clusterCount, 1, 1, 1, 0, 0, IfThen(encoder.Verbose, 1));
+        Yakmo := yakmo_create(clusterCount, 1, 0, 1, 0, 0, IfThen(encoder.Verbose, 1));
         yakmo_load_train_data(Yakmo, chunkRefs.Count, colCount, @Dataset[0]);
         yakmo_train_on_data(Yakmo, @Clusters[0]);
         yakmo_get_centroids(Yakmo, @Centroids[0]);
@@ -1354,7 +1358,7 @@ procedure TEncoder.MakeFrames;
 
     frm.FindAttenuationDivider;
     frm.MakeChunks;
-    frm.KMeansReduce;
+    frm.Reduce;
     frm.KNNFit;
     for i := 0 to CBandCount - 1 do
       frm.bands[i].MakeDstData;

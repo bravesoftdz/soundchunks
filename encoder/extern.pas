@@ -76,6 +76,26 @@ type
 
   PANNkdtree = ^TANNkdtree;
 
+  stCLOptions = record
+    bModelType: Boolean;
+    bForgetFactorEnabled: Boolean;
+    fSPL: Single;
+  end;
+  PstCLOptions = ^stCLOptions;
+
+  WaveFormat = record
+    iNumOfBits,
+    iNumOfChannel,
+    iSamplingRate: Integer;
+  end;
+  PWaveFormat = ^WaveFormat;
+
+  stAudioData = record
+    pRefData,
+    pTestData: array[0..1] of PSmallInt;
+  end;
+  PstAudioData = ^stAudioData;
+
   TCompareFunction=function(Item1,Item2,UserParameter:Pointer):Integer;
 
 procedure DoExternalSKLearn(Dataset: TFloatDynArray2;  ClusterCount, Precision: Integer; Compiled, PrintProgress: Boolean; var Clusters: TIntegerDynArray; var Centroids: TFloatDynArray2);
@@ -95,12 +115,18 @@ procedure yakmo_load_train_data(ay: PYakmo; rowCount: Cardinal; colCount: Cardin
 procedure yakmo_train_on_data(ay: PYakmo; pointToCluster: PInteger); stdcall; external 'yakmo_single.dll';
 procedure yakmo_get_centroids(ay: PYakmo; centroids: PPFloat); stdcall; external 'yakmo_single.dll';
 
-function ann_kdtree_create(pa: PPANNFloat; n, dd, bs: Integer; split: TANNsplitRule): PANNkdtree; external 'ANN.dll';
-procedure ann_kdtree_destroy(akd: PANNkdtree); external 'ANN.dll';
-function ann_kdtree_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; external 'ANN.dll';
-function ann_kdtree_pri_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; external 'ANN.dll';
-procedure ann_kdtree_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); external 'ANN.dll';
-procedure ann_kdtree_pri_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); external 'ANN.dll';
+function ann_kdtree_create(pa: PPANNFloat; n, dd, bs: Integer; split: TANNsplitRule): PANNkdtree; cdecl; external 'ANN.dll';
+procedure ann_kdtree_destroy(akd: PANNkdtree); cdecl; external 'ANN.dll';
+function ann_kdtree_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; cdecl; external 'ANN.dll';
+function ann_kdtree_pri_search(akd: PANNkdtree; q: PANNFloat; eps: TANNFloat; err: PANNFloat): Integer; cdecl; external 'ANN.dll';
+procedure ann_kdtree_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); cdecl; external 'ANN.dll';
+procedure ann_kdtree_pri_search_multi(akd: PANNkdtree; idxs: PInteger; errs: PANNFloat; cnt: Integer; q: PANNFloat; eps: TANNFloat); cdecl; external 'ANN.dll';
+
+function eaqualCreateInstance: Pointer; cdecl; external 'libEAQUAL.dll';
+procedure eaqualKillInstance(pInstance: Pointer); cdecl; external 'libEAQUAL.dll';
+function eaqualInitInstance(pInstance: Pointer; pCLOptions: PstCLOptions; pWFormat: PWaveFormat): Cardinal; cdecl; external 'libEAQUAL.dll';
+function eaqualProcessInstance(pInstance: Pointer; pAudioData: PstAudioData): Cardinal; cdecl; external 'libEAQUAL.dll';
+function eaqualEndInstance(pInstance: Pointer; pfResults: PPDouble; piResultLength: PInteger): Cardinal; cdecl; external 'libEAQUAL.dll';
 
 function InvariantFormatSettings: TFormatSettings;
 function internalRuncommand(p:TProcess;var outputstring:string;
