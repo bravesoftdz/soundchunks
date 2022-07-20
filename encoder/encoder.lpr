@@ -947,6 +947,7 @@ begin
           AStream.WriteByte((cl[j].dstData[k] - Low(ShortInt)) and $ff);
     12:
       for j := 0 to cl.Count - 1 do
+      begin
         for k := 0 to encoder.ChunkSize div 2 - 1 do
         begin
           s1 := cl[j].dstData[k * 2 + 0] + 2048;
@@ -956,6 +957,15 @@ begin
           AStream.WriteByte(s1 and $ff);
           AStream.WriteByte(s2 and $ff);
         end;
+
+        if Odd(encoder.ChunkSize) then
+        begin
+          s1 := cl[j].dstData[encoder.ChunkSize - 1] + 2048;
+
+          AStream.WriteByte((s1 shr 4) and $f0);
+          AStream.WriteByte(s1 and $ff);
+        end;
+      end
     else
       Assert(False, 'ChunkBitDepth not supported');
   end;

@@ -137,6 +137,7 @@ var
               end;
           12:
             for i := 0 to ChunkCount - 1 do
+            begin
               for j := 0 to ChunkSize div 2 - 1 do
               begin
                 b := ASourceStream.ReadByte;
@@ -146,6 +147,15 @@ var
                 Chunks[i, j * 2 + 0] := s1 - 2048;
                 Chunks[i, j * 2 + 1] := s2 - 2048;
               end;
+
+              if Odd(ChunkSize) then
+              begin
+                b := ASourceStream.ReadByte;
+                s1 := Integer(ASourceStream.ReadByte) or ((b and $f0) shl 4);
+
+                Chunks[i, ChunkSize - 1] := s1 - 2048;
+              end;
+            end;
           else
             Assert(False, 'ChunkBitDepth not supported');
         end;

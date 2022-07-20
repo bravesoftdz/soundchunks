@@ -9,9 +9,9 @@
         <Filename Value="decoder.lpr"/>
         <IsPartOfProject Value="True"/>
         <IsVisibleTab Value="True"/>
-        <TopLine Value="52"/>
-        <CursorPos X="40" Y="88"/>
-        <UsageCount Value="35"/>
+        <TopLine Value="104"/>
+        <CursorPos Y="158"/>
+        <UsageCount Value="36"/>
         <Loaded Value="True"/>
       </Unit>
       <Unit>
@@ -20,7 +20,7 @@
         <EditorIndex Value="2"/>
         <TopLine Value="13"/>
         <CursorPos X="19" Y="62"/>
-        <UsageCount Value="35"/>
+        <UsageCount Value="36"/>
         <Loaded Value="True"/>
       </Unit>
       <Unit>
