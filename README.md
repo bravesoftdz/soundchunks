@@ -6,5 +6,6 @@ So far, the encoder works reliably and a reference decoder is provided for furth
 
 At full bitrate, quality is slightly better than ADPCM, and bitrate is lower.
 
-_Author: GliGli_ / 
-_License: GNU GPL v3_
+Project page: https://github.com/gligli/soundchunks (source code, releases)
+
+_Author: GliGli_ / _License: GNU GPL v3_
