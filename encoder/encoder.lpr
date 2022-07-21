@@ -255,6 +255,72 @@ begin
     Result := x / y;
 end;
 
+procedure DFT(frequencies, wave: PDouble; N: Integer);
+var
+  real, imag: Double;
+  k, i: Integer;
+begin
+  real := 0;
+  imag := 0;
+
+  for k := 0 to N - 1 do
+  begin
+    for i := 0 to N - 1 do
+    begin
+      real += wave[i] * cos(-2 * PI * k * i / N);
+      imag += wave[i] * sin(-2 * PI * k * i / N);
+    end;
+
+    frequencies[k] := real * real + imag * imag;
+    real := 0;
+    imag := 0;
+  end;
+end;
+
+procedure iDFT(frequencies, wave: PDouble; N: Integer);
+var
+  real, imag: Double;
+  k, i: Integer;
+begin
+  real := 0;
+  imag := 0;
+
+  for k := 0 to N - 1 do
+  begin
+    for i := 0 to N - 1 do
+    begin
+      real += wave[i] * cos(2 * PI * k * i / N);
+      imag += wave[i] * sin(2 * PI * k * i / N);
+
+    end;
+    real /= N;
+    imag /= N;
+    frequencies[k] := sqrt(real * real + imag * imag);
+    real := 0;
+    imag := 0;
+  end;
+end;
+
+// from https://github.com/ke2li/Arduino-Music-Tuner/blob/master/cepstrum/cepstrum.ino
+procedure cepstrum(wave: PDouble; N: Integer);
+var
+  temp: TDoubleDynArray;
+  i: Integer;
+begin
+  SetLength(temp, N);
+
+  //step 1 of cepstrum
+  DFT(@temp[0], wave, N);
+
+  //step 2 of cepstrum
+  for i := 0 to N - 1 do
+    if not IsZero(temp[i]) then
+      temp[i] := Log10(temp[i]);
+
+  //step 3 of cepstrum
+  iDFT(wave, @temp[0], N);
+end;
+
 { TChunk }
 
 constructor TChunk.Create(frm: TFrame; idx, bandIdx: Integer; underSmp: Integer; srcDta: PDouble);
@@ -289,6 +355,11 @@ begin
   for i := 0 to High(data) do
     data[i] := srcData[IfThen(dstReversed, High(data) - i, i)] * IfThen(dstNegative, -1, 1);
   dct := TEncoder.ComputeDCT(Length(data), data);
+
+  SetLength(dct, Length(srcData) * 2);
+  cepstrum(@data[0], Length(srcData));
+  for i := 0 to High(srcData) do
+    dct[i + Length(srcData)] := data[i] * 0.00001;
 end;
 
 procedure TChunk.ComputeDstAttributes;
@@ -742,8 +813,8 @@ begin
       WriteLn('Reduce Frame = ', index, ', N = ', chunkRefs.Count, ', K = ', clusterCount);
 
     SetLength(Clusters, chunkRefs.Count);
-    SetLength(Centroids, clusterCount, encoder.ChunkSize);
-    SetLength(centroid, encoder.chunkSize);
+    SetLength(Centroids, clusterCount, colCount);
+    SetLength(centroid, colCount);
 
     if not encoder.PythonReduce then
     begin
