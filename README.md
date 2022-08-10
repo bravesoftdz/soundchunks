@@ -24,7 +24,7 @@ All multi-byte elements are **Little-Endian**
 - ChunkSize (1 byte) : Number of sole samples in a **chunk**;
 - SampleRate (3 bytes) : Audio sample rate (eg: 44100).
 - ChunkBlend (1 byte) : Reserved (should be 0).
-- AttenuationDivider (2 bytes) : 1 / AttenuationDivider is the increment for **chunks** attenuations (eg: chunk attenuation = 2 -> attenuation = 1 / AttenuationDivider + 2 / AttenuationDivider + 3 / AttenuationDivider).
+- AttenuationDivider (2 bytes) : 1 / AttenuationDivider is the increment for **chunks** attenuations (eg: chunk attenuation = 3 -> attenuation = (1 + 1 / AttenuationDivider + 2 / AttenuationDivider + 3 / AttenuationDivider)).
 - Attenuations (4 bits * ChunkCount; byte padded) : Attenuations, one per **chunk**. This is how many times 'Increment / AttenuationDivider' should be accumulated and multiplied to each sole sample to give an usable **chunk**.
 - Chunk sole samples ((ChunkBitDepth bits per sole sample) * ChunkSize * ChunkCount elements; word padded for 12 bits): Actual *chunks* of ChunkSize sole samples.
 - FrameLength (4 bytes) : Number of **chunk indexes** in the **frame**.
