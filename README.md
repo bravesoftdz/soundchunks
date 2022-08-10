@@ -31,5 +31,5 @@ All multi-byte elements are **Little-Endian**
 - ChunkIndexes ((3-4 bits + variable length coded) * FrameLength; word padded) : 
   * Negative (1 bit) : The **chunk** should be played with all sole samples in two's complement or with negative phase.
   * Reversed (1 bit; only if StreamVersion > 0) : The **chunk** should be played with all sole samples in backwards order.
-  * VariableCodingHeader (2 bits) : 0b00: chunk index is 3 bits; 0b01: chunk index is 6 bits; 0b10: chunk index is 9 bits; 0b11: chunk index is 12 bits; 
-  * Chunk index (variable length coded; cf. VariableCodingHeader): *Chunk index* from the frame.
+  * VariableCodingHeader (2 bits) : 0b00: **chunk index** is 3 bits; 0b01: **chunk index** is 6 bits; 0b10: **chunk index** is 9 bits; 0b11: **chunk index** is 12 bits; 
+  * Chunk index (variable length coded; cf. VariableCodingHeader): **Chunk index** from the frame.
